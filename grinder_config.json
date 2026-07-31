@@ -1,0 +1,14 @@
+{
+    "email": "YOUR_WOT_EMAIL",
+    "password": "YOUR_WOT_PASSWORD",
+    "realm": "EU",
+    "app_id": "",
+    "cycles": 100,
+    "speed": "normal",
+    "goal": "free_xp",
+    "aggression": "very_aggressive",
+    "queue_type": "",
+    "tank_id": null,
+    "log_file": null,
+    "verbose": false
+}
