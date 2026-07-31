@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-WoT Grinder Bot v8.0 — Complete Account Automation
+WoT Grinder Bot v9.0 — Complete Account Automation
 ====================================================
 Logs in with EMAIL + PASSWORD via Keccak-512 POW (no browser needed).
 Connects to game servers using correct BigWorld protocol (UDP + TCP).
 Grinds: Free XP, Credits, Battle Pass, Daily Missions.
 
-FIXES in V8:
-  - Fixed logger-before-definition crash (NameError on import)
-  - Correct BigWorld packet format: u32 prefix (computed checksum) + u16 flags + body
+FIXES in V9:
+  - TCP-FIRST: tries TCP on all ports before UDP (no more 9-min UDP waste)
+  - Correct PING prefix=1 (not xorshift) for initial handshake
   - Correct PING element ID: 0x02 (not 0x07)
   - Correct WoT game ports: 20016, 20018, 20010-20020 (not 50010-50014)
-  - Added UDP support (BigWorld login app uses UDP)
+  - TCP waits for response (V8 connected but never checked response)
   - Added BigWorld LoginRequest protocol
-  - Auto-detection of working server/port/protocol
+  - Tries TLS on ALL ports (not just 443)
   - TCP fallback on all game ports
 
 Usage:
@@ -213,7 +213,8 @@ class BigWorldPacket:
         Element: ID=0x02, data=u8 num (1 byte)
         """
         body = bytes([PING_ELEMENT, num & 0xFF])
-        return BigWorldPacket.build_packet(body, flags=0)
+        # Initial PING uses prefix=1 (not xorshift checksum)
+        return struct.pack("<I", 1) + struct.pack("<H", 0) + body
 
     @staticmethod
     def build_login_request(protocol: int = 0x0144, username: str = "",
@@ -243,7 +244,8 @@ class BigWorldPacket:
 
         # Prepend element ID
         full_body = bytes([LOGIN_REQUEST]) + bytes(body)
-        return BigWorldPacket.build_packet(full_body, flags=0)
+        # Initial login uses prefix=1 (not xorshift)
+        return struct.pack("<I", 1) + struct.pack("<H", 0) + full_body
 
     @staticmethod
     def encode_entity_method(entity_id: int, method_id: int, args: bytes = b"") -> bytes:
@@ -536,31 +538,40 @@ class GameConnection:
 
     def connect(self) -> bool:
         """
-        Connect to game server. Tries UDP first (BigWorld native), then TCP.
-        Tests each server/port combination with a PING packet.
+        Connect to game server. TCP FIRST (since UDP is blocked in most environments),
+        then quick UDP fallback on just 2 ports.
         """
         servers = self.config["login_servers"]
-        udp_ports = self.config.get("login_ports_udp", [20016, 20018])
-        tcp_ports = self.config.get("game_ports_tcp", [5222, 5223, 443])
+        tcp_ports = [20016, 20018, 5222, 5223, 443]
 
         ping_pkt = BigWorldPacket.build_ping(0)
-        logger.info("BigWorld PING packet: %s (%d bytes)", ping_pkt.hex(), len(ping_pkt))
+        login_pkt = BigWorldPacket.build_login_request(username="guest")
+        logger.info("PING: %s (%d bytes)", ping_pkt.hex(), len(ping_pkt))
+        logger.info("LOGIN: %s... (%d bytes)", login_pkt[:16].hex(), len(login_pkt))
 
-        # Phase 1: Try UDP (BigWorld native protocol)
-        logger.info("Phase 1: Testing UDP connections (BigWorld native)...")
-        for server in servers:
-            for port in udp_ports:
-                if self._try_udp(server, port, ping_pkt):
-                    return True
-
-        # Phase 2: Try TCP
-        logger.info("Phase 2: Testing TCP connections...")
+        # Phase 1: Try TCP on ALL ports, with and without TLS
+        logger.info("Phase 1: TCP connections (all ports, TLS on/off)...")
         for server in servers:
             for port in tcp_ports:
-                if self._try_tcp(server, port):
-                    return True
+                # Try TLS + PING
+                if self._try_tcp(server, port, True, ping_pkt, "PING+TLS"): return True
+                # Try raw + PING
+                if self._try_tcp(server, port, False, ping_pkt, "PING"): return True
+                # Try raw + LoginRequest with length prefix
+                login_len = struct.pack(">I", len(login_pkt)) + login_pkt
+                if self._try_tcp(server, port, False, login_len, "LOGIN+LEN"): return True
+                # Try raw + LoginRequest
+                if self._try_tcp(server, port, False, login_pkt, "LOGIN"): return True
+                # Try TLS + LoginRequest
+                if self._try_tcp(server, port, True, login_pkt, "LOGIN+TLS"): return True
 
-        logger.error("Connection failed: all servers/ports exhausted")
+        # Phase 2: Quick UDP (just 2 ports on first server)
+        logger.info("Phase 2: Quick UDP test (2 ports only)...")
+        for port in [20016, 20018]:
+            if self._try_udp(servers[0], port, ping_pkt):
+                return True
+
+        logger.error("Connection failed: all servers/ports/protocols exhausted")
         self.connected = False
         return False
 
@@ -589,33 +600,53 @@ class GameConnection:
             logger.info("  ✗ UDP %s:%d — %s", server, port, str(e)[:50])
             return False
 
-    def _try_tcp(self, server: str, port: int) -> bool:
-        """Try a TCP connection to a server:port."""
+    def _try_tcp(self, server: str, port: int, use_tls: bool = False,
+                 data: bytes = None, label: str = "PING") -> bool:
+        """Try TCP with specific data and TLS option. WAITS for response."""
+        if data is None:
+            data = BigWorldPacket.build_ping(0)
+        tls_tag = "+TLS" if use_tls else ""
         try:
-            logger.info("  TCP %s:%d...", server, port)
+            logger.info("  TCP%s %s:%d %s...", tls_tag, server, port, label)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(8)
+            sock.settimeout(5)
             sock.connect((server, port))
 
-            if port == 443:
+            if use_tls:
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
                 sock = ctx.wrap_socket(sock, server_hostname=server)
 
-            # Send a BigWorld PING
-            ping_pkt = BigWorldPacket.build_ping(0)
-            sock.sendall(ping_pkt)
+            sock.sendall(data)
 
-            self.tcp_sock = sock
-            self.connected = True
-            self.protocol = "tcp"
-            self.server = server
-            self.port = port
-            logger.info("  ✓ TCP %s:%d connected (TLS=%s)", server, port, port == 443)
-            return True
+            # WAIT for response (this was the V8 bug — it never checked!)
+            sock.settimeout(5)
+            try:
+                resp = sock.recv(4096)
+                if resp and len(resp) > 0:
+                    logger.info("  ✓ %s %s:%d — RESPONSE! %d bytes: %s",
+                               label, server, port, len(resp), resp[:20].hex())
+                    self.tcp_sock = sock
+                    self.connected = True
+                    self.protocol = "tcp"
+                    self.server = server
+                    self.port = port
+                    return True
+                else:
+                    logger.info("  ✗ %s %s:%d — connected, no response", label, server, port)
+                    sock.close()
+                    return False
+            except socket.timeout:
+                logger.info("  ✗ %s %s:%d — connected, recv timeout", label, server, port)
+                sock.close()
+                return False
+        except socket.timeout:
+            return False
+        except ssl.SSLError:
+            return False
         except Exception as e:
-            logger.info("  ✗ TCP %s:%d — %s", server, port, str(e)[:50])
+            logger.info("  ✗ TCP%s %s:%d %s — %s", tls_tag, server, port, label, str(e)[:30])
             return False
 
     def send(self, data: bytes) -> bool:
@@ -864,7 +895,7 @@ class WoTGrinder:
 
     def run(self) -> dict:
         print(f"\n{'='*60}")
-        print(f"  WoT Grinder Bot v8.0")
+        print(f"  WoT Grinder Bot v9.0")
         print(f"  Realm: {self.realm} | Goal: {self.goal}")
         print(f"  Cycles: {self.cycles} | Aggression: {self.aggression}")
         print(f"{'='*60}\n")
@@ -1082,7 +1113,7 @@ class WoTGrinder:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="WoT Grinder Bot v8.0 — BigWorld protocol + Keccak-512 POW login",
+        description="WoT Grinder Bot v9.0 — BigWorld protocol + Keccak-512 POW login",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Login: Email + Password (Keccak-512 POW, no browser needed!)
