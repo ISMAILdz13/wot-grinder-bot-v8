@@ -1,0 +1,13 @@
+[package]
+name = "wot-bot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wg-toolkit = { version = "0.4", features = ["net"] }
+blowfish = "0.9"
+rand = "0.8"
+
+[[bin]]
+name = "wot-bot"
+path = "src/main.rs"
