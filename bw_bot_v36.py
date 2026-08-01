@@ -196,36 +196,47 @@ YB60u6lK9cvDEeuhPH95TPpzLNUFgmQIu9FU8PkcKA53bj0LWZR7v86Oco6vFg6V
 sQIDAQAB
 -----END PUBLIC KEY-----"""
 
-def run(server="login.p1.worldoftanks.eu", port=20016, timeout=10, max_attempts=5):
+def run(server="login.p1.worldoftanks.eu", port=20016, timeout=10, max_attempts=15):
     PROTOCOL = 285278213
     
     print(f"\n{'='*55}")
     print(f"  WoT Bot v36 — RSA Encrypted Login")
     print(f"  Protocol: 17.1.0 (5) = {PROTOCOL}")
     print(f"  RSA: OAEP-SHA1 (from wg-toolkit-rs source)")
+    print(f"  Max attempts: {max_attempts}")
     print(f"  {server}:{port}")
     print(f"{'='*55}")
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(timeout)
-    rid = 1
-    
-    print(f"\n[1] PING...")
-    sock.sendto(ping_packet(rid=rid), (server, port))
-    try:
-        sock.recvfrom(4096); print(f"    PING OK"); rid += 1
-    except socket.timeout:
-        sock.close(); sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(timeout)
-        server, port = "login.p2.worldoftanks.eu", 20018
-        sock.sendto(ping_packet(rid=rid), (server, port))
-        try: sock.recvfrom(4096); print(f"    p2 PING OK"); rid += 1
-        except: print(f"    PING failed"); sock.close(); return
+    seen_headers = set()
     
     for attempt in range(1, max_attempts + 1):
-        print(f"\n[{attempt+1}] Attempt {attempt}/{max_attempts}: Get challenge...")
+        # Fresh socket each attempt to get new challenge
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        rid = 1
         
-        # Step 1: Unencrypted login to get challenge
+        # PING
+        if attempt == 1:
+            print(f"\n[1] PING...")
+        sock.sendto(ping_packet(rid=rid), (server, port))
+        try:
+            sock.recvfrom(4096)
+            if attempt == 1: print(f"    PING OK")
+            rid += 1
+        except socket.timeout:
+            sock.close()
+            # Try p2
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            server, port = "login.p2.worldoftanks.eu", 20018
+            sock.sendto(ping_packet(rid=rid), (server, port))
+            try:
+                sock.recvfrom(4096); rid += 1
+            except:
+                print(f"    PING failed"); sock.close(); continue
+        
+        # Get challenge
+        print(f"\n[{attempt+1}] Attempt {attempt}/{max_attempts}...")
         login_body, bf_key = build_unencrypted_login_body(PROTOCOL)
         elem = build_request_v16(0x00, rid, login_body)
         pkt = _pkt(elem, first_req=0)
@@ -235,48 +246,53 @@ def run(server="login.p1.worldoftanks.eu", port=20016, timeout=10, max_attempts=
         try:
             data, _ = sock.recvfrom(4096)
         except socket.timeout:
-            print(f"    Timeout"); continue
+            print(f"    Timeout"); sock.close(); continue
         
         result = parse_reply_full(data)
-        if not result: print(f"    Parse failed"); continue
+        if not result: print(f"    Parse failed"); sock.close(); continue
         status, _, extra = result
-        if status != 0x42: print(f"    Status: 0x{status:02X}"); continue
+        if status != 0x42: print(f"    Status: 0x{status:02X}"); sock.close(); continue
         
         challenge_type, key_prefix, max_nonce = parse_cuckoo_challenge(extra)
         header = key_prefix.decode('utf-8', errors='replace')
+        
+        # Skip duplicate challenges
+        if header in seen_headers:
+            print(f"    Duplicate challenge: {header} — skipping (reconnect for new)")
+            sock.close()
+            continue
+        seen_headers.add(header)
+        
         print(f"    Header: {header}")
         print(f"    Max nonce: {max_nonce}")
         
-        # Step 2: Solve Cuckoo
-        print(f"\n    Solving Cuckoo Cycle...")
+        # Solve
+        print(f"    Solving Cuckoo Cycle...")
         solution, solve_duration = solve_cuckoo(header, max_nonce, attempt)
-        if solution is None: print(f"    No 42-cycle, retry..."); continue
-        if len(solution) != 42: print(f"    Wrong count"); continue
+        if solution is None:
+            print(f"    No 42-cycle, retry with new challenge...")
+            sock.close(); continue
+        if len(solution) != 42:
+            print(f"    Wrong count"); sock.close(); continue
         print(f"    Solution: {len(solution)} nonces")
         
-        # Step 3: Build combined packet with ENCRYPTED login
-        # ChallengeResponse (MESSAGE): [0x03] [len(2B)] [body]
+        # Build combined packet with ENCRYPTED login
         cr_body = struct.pack("<f", solve_duration)
-        cr_body += pack_str(key_prefix)  # key as packed blob
+        cr_body += pack_str(key_prefix)
         cr_body += b''.join(struct.pack("<I", n) for n in solution)
         cr_elem = build_message_v16(0x03, cr_body)
         
         # Try both RSA keys
         for key_name, key_pem in [("KEY_WOT", KEY_WOT), ("KEY_BW", KEY_BW)]:
             print(f"\n    Trying {key_name} with RSA-OAEP-SHA1...")
-            
             enc_login_body = build_encrypted_login_body(PROTOCOL, bf_key, key_pem)
             login_elem = build_request_v16(0x00, rid, enc_login_body)
-            
             content = cr_elem + login_elem
             first_req = len(cr_elem)
             pkt = _pkt(content, first_req=first_req)
             
-            print(f"    Packet: CR({len(cr_elem)}B msg) + Login({len(login_elem)}B req) = {len(pkt)}B")
-            print(f"    Login body: [proto(4B)] [enc=1(1B)] [RSA(256B)] = {len(enc_login_body)}B")
-            
+            print(f"    Packet: {len(pkt)}B (CR={len(cr_elem)}B msg + Login={len(login_elem)}B req)")
             sock.sendto(pkt, (server, port))
-            # Don't increment rid yet — only if this fails do we try the next key
             
             try:
                 data, _ = sock.recvfrom(4096)
@@ -301,36 +317,34 @@ def run(server="login.p1.worldoftanks.eu", port=20016, timeout=10, max_attempts=
                             print(f"    Base app: {ip}:{p}")
                             print(f"    Login key: {lk}")
                     elif status == 0x40:
-                        # Check if it's still "unencrypted" or different error
                         if b"Unencrypted" in extra:
-                            print(f"    → Wrong RSA key or encryption failed")
+                            print(f"    -> Wrong RSA key")
                         else:
-                            print(f"    → Different MalformedRequest (RSA key may be right, format wrong)")
+                            print(f"    -> Different MalformedRequest")
                     elif status == 0x47:
-                        print(f"    → Invalid User — RSA accepted! Need real WG credentials, not 'guest'")
+                        print(f"    -> Invalid User — RSA ACCEPTED! Need real WG credentials")
                     elif status == 0x48:
-                        print(f"    → Invalid Password — RSA accepted!")
+                        print(f"    -> Invalid Password — RSA ACCEPTED!")
                     elif status == 0x42:
-                        print(f"    → New challenge — Cuckoo solution may have expired")
+                        print(f"    -> New challenge — solution expired")
                     elif status == 0x55:
-                        print(f"    → ChallengeError — Cuckoo solution rejected")
+                        print(f"    -> ChallengeError — solution rejected")
                     else:
-                        print(f"    → Status: 0x{status:02X}")
+                        print(f"    -> Status: 0x{status:02X}")
                     
-                    rid += 1
-                    break  # Got a response, stop trying keys
+                    sock.close()
+                    return  # Done!
                 else:
                     print(f"    No reply parsed")
-                    rid += 1
-                    break
+                    sock.close()
+                    return
             except socket.timeout:
                 print(f"    Timeout with {key_name}")
                 continue
         
-        break  # Done with this attempt
+        sock.close()
     
-    sock.close()
-    print(f"\nDone.")
+    print(f"\nExhausted {max_attempts} attempts. Seen {len(seen_headers)} unique challenges.")
 
 if __name__ == "__main__":
     run()
