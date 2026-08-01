@@ -129,61 +129,54 @@ def siphash24(ctx, n):
 def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & NODEMASK
 
 def verify_standard(key_prefix_bytes, solution):
-    """John Tromp's standard Cuckoo verification:
-    1. All u[i] distinct
-    2. All v[i] distinct
-    3. Edges form cycle: v[i]-HALFSIZE = u[j] for next edge
+    """REAL John Tromp verification from cuckoo.h:
+    - U and V values in SAME space [0, NODEMASK] (NO HALFSIZE offset!)
+    - Match values at same parity (U with U, V with V)
+    - Follow cycle for PROOFSIZE steps
+    - 42-edge cycle has 21 unique U-values and 21 unique V-values (CORRECT!)
     """
     ctx = setheader(key_prefix_bytes)
-    us = [sipnode(ctx, n, 0) for n in solution]
-    vs = [sipnode(ctx, n, 1) + HALFSIZE for n in solution]
+    uvs = [0] * (2 * PROOFSIZE)
+    xor0 = 0; xor1 = 0
     
-    # Check 1: all u distinct
-    u_set = set(us)
-    if len(u_set) != PROOFSIZE:
-        dups = len(us) - len(u_set)
-        return False, f"{dups} duplicate U-nodes (only {len(u_set)} unique out of {PROOFSIZE})"
+    for n in range(PROOFSIZE):
+        # Nonces must be in strictly increasing order
+        if n > 0 and solution[n] <= solution[n-1]:
+            return False, f"Nonces not sorted at {n}"
+        uvs[2*n] = sipnode(ctx, solution[n], 0)       # U-value in [0, NODEMASK]
+        uvs[2*n+1] = sipnode(ctx, solution[n], 1)       # V-value in [0, NODEMASK] (NO HALFSIZE!)
+        xor0 ^= uvs[2*n]
+        xor1 ^= uvs[2*n+1]
     
-    # Check 2: all v distinct
-    v_set = set(vs)
-    if len(v_set) != PROOFSIZE:
-        dups = len(vs) - len(v_set)
-        return False, f"{dups} duplicate V-nodes (only {len(v_set)} unique out of {PROOFSIZE})"
+    # XOR check (each value appears twice, so XOR = 0)
+    if xor0 | xor1:
+        return False, f"XOR check failed: xor0={xor0}, xor1={xor1}"
     
-    # Check 3: cycle connectivity
-    # Build map: u -> v, and v-HALFSIZE -> u
-    # The cycle: v[i]-HALFSIZE should equal u[j] for some j, following the chain
-    u_to_v = {}
-    v_minus_half_to_u = {}
-    for i in range(PROOFSIZE):
-        u_to_v[us[i]] = vs[i]
-        v_minus_half_to_u[vs[i] - HALFSIZE] = us[i]
+    # Follow cycle (Tromp algorithm)
+    n = 0; i = 0
+    while True:
+        j = i
+        k = (i + 2) % (2 * PROOFSIZE)
+        while k != i:
+            if uvs[k] == uvs[i]:
+                if j != i:
+                    return False, f"Branch at step {n}"
+                j = k
+            k = (k + 2) % (2 * PROOFSIZE)
+        
+        if j == i:
+            return False, f"Dead end at step {n} (value {uvs[i]} not found)"
+        
+        i = j ^ 1  # Flip to other endpoint
+        n += 1
+        if i == 0:
+            break
     
-    # Follow cycle from first edge
-    start_u = us[0]
-    current_v = u_to_v[start_u]
-    next_u = v_minus_half_to_u.get(current_v - HALFSIZE)
-    if next_u is None:
-        return False, f"V-node {current_v} doesn't map to any U-node"
-    
-    length = 1
-    visited = {start_u}
-    while next_u != start_u:
-        if next_u in visited:
-            return False, f"Cycle revisit at U-node {next_u} (length {length})"
-        visited.add(next_u)
-        current_v = u_to_v[next_u]
-        next_u = v_minus_half_to_u.get(current_v - HALFSIZE)
-        if next_u is None:
-            return False, f"V-node {current_v} doesn't map to any U-node (length {length})"
-        length += 1
-        if length > PROOFSIZE:
-            return False, f"Cycle too long (> {PROOFSIZE})"
-    
-    if length != PROOFSIZE:
-        return False, f"Cycle length {length} != {PROOFSIZE}"
-    
-    return True, f"Valid Cuckoo cycle! {PROOFSIZE} edges, {len(u_set)} U-nodes, {len(v_set)} V-nodes (84 total)"
+    if n == PROOFSIZE:
+        return True, f"VALID Cuckoo cycle! {n} steps (Tromp verification PASSED)"
+    else:
+        return False, f"Short cycle: {n} steps (expected {PROOFSIZE})"
+
 
 def verify_degree2(key_prefix_bytes, solution):
     """Old (wrong) verification — degree 2 check"""
