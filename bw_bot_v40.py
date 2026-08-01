@@ -242,7 +242,7 @@ CONTEXTS = ["", "eu_1.19.1_4", "17.1.0 (5)"]
 
 KEYS = [("KEY_BW", KEY_BW), ("KEY_WOT", KEY_WOT)]
 
-def run(server="login.p1.worldoftanks.eu", port=20016, timeout=15, max_attempts=15):
+def run(server="login.p1.worldoftanks.eu", port=20016, timeout=15, max_attempts=1):
     PROTOCOL = 285278213
     print(f"\n{'='*55}")
     print(f"  WoT Bot v40 — COMPLETE REWRITE")
@@ -256,8 +256,6 @@ def run(server="login.p1.worldoftanks.eu", port=20016, timeout=15, max_attempts=
     combo_idx = 0
     
     for attempt in range(1, max_attempts + 1):
-        if attempt > 1: time.sleep(30)
-        
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(timeout)
         rid = 1
