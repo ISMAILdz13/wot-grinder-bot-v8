@@ -127,9 +127,15 @@ def solve_cuckoo(header, easiness, attempt=1):
         if u==v0 or v==u0: continue
         us[0]=u0; vs[0]=v0
         nu=0; node=u
-        while node: nu+=1; (nu<MAXPATHLEN) or None; us[nu]=node; node=cuckoo[node]
+        while node:
+            nu+=1
+            if nu>=MAXPATHLEN: return None, 0
+            us[nu]=node; node=cuckoo[node]
         nv=0; node=v
-        while node: nv+=1; (nv<MAXPATHLEN) or None; vs[nv]=node; node=cuckoo[node]
+        while node:
+            nv+=1
+            if nv>=MAXPATHLEN: return None, 0
+            vs[nv]=node; node=cuckoo[node]
         if us[nu]==vs[nv]:
             m=min(nu,nv); nu-=m; nv-=m
             while us[nu]!=vs[nv]: nu+=1; nv+=1
@@ -161,7 +167,11 @@ def find_sol(ctx, us, nu, vs, nv, easiness):
     sol = []
     for n in range(easiness):
         u = sipnode(ctx,n,0)+1; v = sipnode(ctx,n,1)+1+HALFSIZE
-        if (u,v) in cycle: sol.append(n); cycle.discard((u,v)); (not cycle) and None; break if not cycle else None
+        if (u,v) in cycle:
+            sol.append(n)
+            cycle.discard((u,v))
+            if not cycle:
+                break
     print(f"    Found {len(sol)} nonces")
     return sol
 
