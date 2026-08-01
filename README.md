@@ -14,7 +14,7 @@
 | Protocol Version | ✅ Found | **17.1.0 (5)** = `285278213` |
 | Login Request | ✅ Working | Server responds with Cuckoo challenge |
 | Cuckoo PoW Challenge | ✅ Received | `0x42` — server issues `cuckoo_cycle` |
-| Cuckoo Solver | 🔄 In Progress | Pure Python SipHash-2-4 solver |
+| Cuckoo Solver | ✅ Fixed | Exact BigWorld source algorithm (mean/cuckoo array) |
 | ChallengeResponse | 🔄 Next Step | Element 0x03 with 42-nonce solution |
 | LoginSuccess | ⏳ Pending | Blowfish-encrypted base app address |
 | Base App Connection | ⏳ Pending | Post-login game server handshake |
@@ -91,7 +91,7 @@ The client must find a 42-edge cycle in the Cuckoo graph and send it back as `Ch
 
 ```
 wot-grinder-bot-v8/
-├── bw_bot_v30.py        # Main bot — complete login flow
+├── bw_bot_v31.py        # Main bot — complete login flow
 ├── bw_bot_v3.py          # Base library (packet framing, PING)
 ├── bw_protocol.py        # BigWorld protocol definitions
 ├── battle_awareness.py   # Battle tracking & entity parsing
@@ -125,13 +125,13 @@ pip3 install -r requirements.txt
 
 ### Run
 ```bash
-python3 bw_bot_v30.py
+python3 bw_bot_v31.py
 ```
 
 ### VPS Setup (one-click)
 ```bash
 bash setup_vps.sh
-python3 bw_bot_v30.py
+python3 bw_bot_v31.py
 ```
 
 ---
