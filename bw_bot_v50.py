@@ -66,13 +66,15 @@ def pack_str_u24(s):
     b = s.encode() if isinstance(s, str) else s
     return pack_u24(len(b)) + b
 
+login_nonce = random.randint(1, 0xFFFFFFFF)
+
 def build_logon_u32(bf_key):
     logon = struct.pack("<B", 0)
     logon += pack_str_u24("guest")
     logon += pack_str_u24("")
     logon += pack_str_u24(bf_key)
     logon += pack_str_u24("")
-    logon += struct.pack("<I", random.randint(1, 0xFFFFFFFF))
+    logon += struct.pack("<I", login_nonce)
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
@@ -212,11 +214,11 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  CUCKOO ACCEPTED! Fix LogOnParams: packed_u24 + context field")
+    print(f"  30s timeout + same nonce both logins + packed_u24 LogOnParams")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(15)
+    sock.settimeout(30)
     rid = 1
 
     print("[0] PING...", end=" ", flush=True)
@@ -228,7 +230,7 @@ def main():
     for attempt in range(1, 16):
         print(f"\n[1] Login — attempt {attempt}...")
         bf_key = os.urandom(56)
-        logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", random.randint(1, 0xFFFFFFFF))
+        logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce)
         login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon
         elem = build_request_v16(0x00, rid, login_body)
         sock.sendto(build_packet(elem, first_req=0), SERVER)
@@ -258,7 +260,7 @@ def main():
         print("    No solution, reopening socket...")
         sock.close()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(15)
+        sock.settimeout(30)
         sock.sendto(build_ping(rid), SERVER)
         try: sock.recvfrom(4096); rid += 1
         except: pass
@@ -293,6 +295,7 @@ def main():
         if result:
             status, _, extra = result
             print(f"    Status: 0x{status:02X}")
+            print(f"    Raw extra ({len(extra)}B): {extra[:100].hex()}")
             try: msg = extra.decode('utf-8', errors='replace')[:200]
             except: msg = ""
             if msg.strip(): print(f"    Message: {msg}")
@@ -304,7 +307,8 @@ def main():
             else: print(f"    -> NEW: 0x{status:02X}")
         else: print("    Can't parse")
     else:
-        print("    All retries timed out")
+        print("    All retries timed out (30s each)")
+        print("    Server may have accepted login - response could be on different format/port")
     sock.close()
     print("\nDone.")
 
