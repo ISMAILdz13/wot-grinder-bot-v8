@@ -84,7 +84,7 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
 def build_cr_body(duration, key_str, solution):
     body = struct.pack("<f", duration)  # data << duration (f32)
-    body += pack_str_u32(key_str)  # data << key (u32 length + string)
+    body += pack_str_u24(key_str)  # data << key (packed_u24 — SAME as challenge!)
     body += b''.join(struct.pack("<I", n) for n in solution)  # 42 × u32
     return body
 
@@ -211,7 +211,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  WITH duration + key=prefix+counter (COMBINED FIX)")
+    print(f"  packed_u24 key (THE REAL FIX) + duration + prefix+counter")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -274,7 +274,7 @@ def main():
     login_elem = build_request_v16(0x00, rid, login_body)
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
-    print(f"    CR body={len(cr_body)}B (duration=4B + key={len(key_str)}B + 42×4B = {4+len(key_str)+4+168}B)")
+    print(f"    CR body={len(cr_body)}B (duration=4B + key_packed_u24={1+len(key_str)}B + 42×4B = {4+1+len(key_str)+168}B)")
     print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B, Packet={len(pkt)}B")
 
     got_response = False
