@@ -255,19 +255,23 @@ PROTOCOL = 285278213
 
 def main():
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v46 — Cuckoo verification debug")
+    print(f"  WoT Bot v46 — Cuckoo verified valid!")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(15)
+    sock.settimeout(15)  # 15s for login response
     rid = 1
 
+    # PING
     print("[0] PING...", end=" ", flush=True)
     sock.sendto(build_ping(rid), SERVER)
-    try: sock.recvfrom(4096); print("OK"); rid += 1
-    except socket.timeout: print("TIMEOUT"); sock.close(); return
+    try:
+        sock.recvfrom(4096); print("OK"); rid += 1
+    except socket.timeout:
+        print("TIMEOUT"); sock.close(); return
 
-    solution = None; duration = 0; key_prefix = None
+    # Retry Cuckoo up to 5 times
+    solution = None; duration = 0; key_prefix = None; bf_key = None
     for attempt in range(1, 6):
         print(f"\n[1] Login — attempt {attempt}...")
         bf_key = os.urandom(56)
@@ -276,45 +280,37 @@ def main():
         elem = build_request_v16(0x00, rid, login_body)
         sock.sendto(build_packet(elem, first_req=0), SERVER)
         rid += 1
-        try: data, _ = sock.recvfrom(4096)
-        except socket.timeout: print("    TIMEOUT"); sock.close(); return
+        try:
+            data, _ = sock.recvfrom(4096)
+        except socket.timeout:
+            print("    TIMEOUT"); sock.close(); return
         result = parse_reply(data)
         if not result or result[0] != 0x42:
             print(f"    No challenge: {result}"); sock.close(); return
         key_prefix, max_nonce = parse_challenge(result[2])
-        print(f"    key_prefix: {key_prefix} ({len(key_prefix)}B)")
-        print(f"    key_prefix hex: {key_prefix.hex()}")
-        print(f"    max_nonce: {max_nonce}")
+        print(f"    key_prefix: {key_prefix} ({len(key_prefix)}B), max_nonce: {max_nonce}")
 
         print(f"[2] Solving Cuckoo — attempt {attempt}...")
-        # Pass RAW BYTES to solver (not decoded string)
         solution, duration = solve_cuckoo(key_prefix, max_nonce)
         if solution and len(solution) == 42:
             print(f"    Solved: {len(solution)} nonces, {duration:.1f}s")
-            print(f"    Solution: {solution[:5]}...{solution[-5:]}")
-            
-            # LOCAL VERIFICATION
-            print(f"[2b] Local verification...")
+            # Local verification
             valid, msg = verify_cuckoo(key_prefix, solution)
-            print(f"    Result: {valid} — {msg}")
-            if not valid:
-                print(f"    LOCAL VERIFICATION FAILED — solution is invalid!")
-                # Try without colon
-                if key_prefix.endswith(b':'):
-                    print(f"    Trying without colon...")
-                    valid2, msg2 = verify_cuckoo(key_prefix[:-1], solution)
-                    print(f"    Without colon: {valid2} — {msg2}")
+            print(f"    Verify: {valid} — {msg}")
+            if valid:
+                break
+            else:
+                print("    INVALID — retrying")
                 solution = None
-                continue
-            break
-        print(f"    No 42-cycle, retrying...")
+        else:
+            print("    No 42-cycle, retrying...")
         time.sleep(1)
 
     if not solution or len(solution) != 42:
         print("    Failed after 5 attempts"); sock.close(); return
 
-    # Send CR+Login
-    print(f"\n[3] Sending CR+Login (CR u32 addBlob)...")
+    # Send CR+Login combined
+    print(f"\n[3] Sending CR+Login...")
     cr_body = build_cr_body_u32(duration, key_prefix, solution)
     cr_elem = build_message_v16(0x03, cr_body)
     login_body = build_login_noflag(PROTOCOL, bf_key, KEY_BW)
@@ -322,26 +318,21 @@ def main():
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
     print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B, Packet={len(pkt)}B")
-    
-    # Debug: print CR body structure
-    print(f"    CR body: duration={duration:.1f}, key_prefix_len={len(key_prefix)}, sol_count={len(solution)}")
-    print(f"    CR body hex (first 40B): {cr_body[:40].hex()}")
-    
-    # Send CR+Login with retry (UDP can drop)
-    for send_attempt in range(3):
+
+    # Send with 3 retries
+    got_response = False
+    for sa in range(3):
         sock.sendto(pkt, SERVER)
         try:
             data, _ = sock.recvfrom(4096)
+            got_response = True
             break
         except socket.timeout:
-            if send_attempt < 2:
-                print(f"    Timeout, retrying ({send_attempt+2}/3)...")
+            if sa < 2:
+                print(f"    Timeout, retry {sa+2}/3...")
                 time.sleep(1)
-            else:
-                print(f"    All retries failed")
-    else:
-        data = None
-    
+
+    if got_response:
         result = parse_reply(data)
         if result:
             status, _, extra = result
@@ -354,9 +345,10 @@ def main():
             elif status == 0x55: print("    -> Failed login challenge")
             elif status == 0x40: print("    -> destream")
             else: print(f"    -> NEW: 0x{status:02X}")
-        else: print("    Can't parse")
-    except socket.timeout:
-        print("    Timeout")
+        else:
+            print("    Can't parse reply")
+    else:
+        print("    All retries timed out")
 
     sock.close()
     print("\nDone.")
