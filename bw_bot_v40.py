@@ -262,20 +262,36 @@ def run(server="login.p1.worldoftanks.eu", port=20016, timeout=15, max_attempts=
         sock.settimeout(timeout)
         rid = 1
         
-        # PING
-        sock.sendto(build_ping(rid), (server, port))
-        try:
-            sock.recvfrom(4096); rid += 1
-        except socket.timeout:
+        # PING — try all 3 servers
+        servers = [("login.p1.worldoftanks.eu", 20016), ("login.p2.worldoftanks.eu", 20018), ("login.p3.worldoftanks.eu", 20016)]
+        pinged = False
+        for srv, prt in servers:
+            print(f"    PING {srv}:{prt}...", end=" ", flush=True)
+            try:
+                sock.sendto(build_ping(rid), (srv, prt))
+                data, _ = sock.recvfrom(4096)
+                print(f"OK ({len(data)}B)")
+                server, port = srv, prt
+                rid += 1
+                pinged = True
+                break
+            except socket.timeout:
+                print("timeout")
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(timeout)
+            except Exception as e:
+                print(f"error: {e}")
+                sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.settimeout(timeout)
+        if not pinged:
+            print(f"    All PINGs failed, skipping...")
             sock.close()
-            server, port = "login.p2.worldoftanks.eu", 20018
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(timeout)
-            sock.sendto(build_ping(rid), (server, port))
-            try: sock.recvfrom(4096); rid += 1
-            except: sock.close(); continue
+            continue
         
         # Step 1: Unencrypted login to get challenge
+        print(f"    Sending login request...")
         bf_key = os.urandom(56)  # 56-BYTE KEY!
         login_body = build_login_body(PROTOCOL, bf_key, encrypted=False, context="")
         elem = build_request_v16(0x00, rid, login_body)
