@@ -82,8 +82,9 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
-def build_cr_body(key_str, solution):
-    body = pack_str_u32(key_str)  # data << key (u32 length + string)
+def build_cr_body(duration, key_str, solution):
+    body = struct.pack("<f", duration)  # data << duration (f32)
+    body += pack_str_u32(key_str)  # data << key (u32 length + string)
     body += b''.join(struct.pack("<I", n) for n in solution)  # 42 × u32
     return body
 
@@ -210,7 +211,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  NO duration! Key = prefix+counter!")
+    print(f"  WITH duration + key=prefix+counter (COMBINED FIX)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -241,7 +242,7 @@ def main():
         print(f"    prefix: {prefix_str}, max_nonce: {max_nonce}")
 
         # Try prefix+"0", prefix+"1", etc. until solution found (BigWorld style)
-        for counter in range(10):
+        for counter in range(3):
             key_str = f"{prefix_str}{counter}"
             print(f"[2] Solving Cuckoo (key={key_str})...")
             solution, solve_time = solve_cuckoo(key_str, max_nonce)
@@ -267,13 +268,13 @@ def main():
 
     # CR body: NO DURATION! Just key + 42 nonces
     print(f"\n[3] Sending CR+Login (NO duration, key={key_str})...")
-    cr_body = build_cr_body(key_str, solution)
+    cr_body = build_cr_body(solve_time, key_str, solution)
     cr_elem = build_message_v16(0x03, cr_body)
     login_body = build_login_noflag(PROTOCOL, bf_key, KEY_BW)
     login_elem = build_request_v16(0x00, rid, login_body)
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
-    print(f"    CR body={len(cr_body)}B (key={len(key_str)}B + 42×4B = {len(key_str)+4+168}B)")
+    print(f"    CR body={len(cr_body)}B (duration=4B + key={len(key_str)}B + 42×4B = {4+len(key_str)+4+168}B)")
     print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B, Packet={len(pkt)}B")
 
     got_response = False
