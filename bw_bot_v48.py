@@ -319,8 +319,8 @@ def main():
             if valid:
                 break
             else:
-                print("    STANDARD VERIFICATION FAILED — solution is NOT a valid Cuckoo cycle!")
-                print("    The solver finds bipartite cycles (degree 2) not Cuckoo cycles (distinct nodes)")
+                print("    TROMP VERIFICATION FAILED!")
+                print("    ")
                 solution = None
         else:
             print("    No 42-cycle, retrying...")
