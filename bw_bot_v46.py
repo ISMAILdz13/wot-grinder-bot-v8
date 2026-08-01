@@ -12,7 +12,7 @@ from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import SHA1
 
 MASK64 = 0xFFFFFFFFFFFFFFFF
-SIZESHIFT=20; PROOFSIZE=42; SIZE=1<<SIZESHIFT; HALFSIZE=SIZE//2; NODEMASK=HALFSIZE-1; MAXPATHLEN=8192
+SIZESHIFT=21; PROOFSIZE=42; SIZE=1<<SIZESHIFT; HALFSIZE=SIZE//2; NODEMASK=HALFSIZE-1; MAXPATHLEN=8192
 FLAG_HAS_REQUESTS = 0x0001
 
 def _prefix(raw):
@@ -255,7 +255,7 @@ PROTOCOL = 285278213
 
 def main():
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v46 — Cuckoo verified valid!")
+    print(f"  WoT Bot v47 — SIZESHIFT=21 FIX!")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
