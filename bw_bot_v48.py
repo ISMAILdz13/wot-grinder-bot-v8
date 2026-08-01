@@ -279,7 +279,7 @@ def main():
     except socket.timeout: print("TIMEOUT"); sock.close(); return
 
     solution = None; duration = 0; key_prefix = None; bf_key = None
-    for attempt in range(1, 6):
+    for attempt in range(1, 16):
         print(f"\n[1] Login — attempt {attempt}...")
         bf_key = os.urandom(56)
         logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", random.randint(1, 0xFFFFFFFF))
@@ -316,11 +316,18 @@ def main():
                 print("    ")
                 solution = None
         else:
-            print("    No 42-cycle, retrying...")
+            print("    No 42-cycle, reopening socket for new challenge...")
+            sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(15)
+            # PING on new socket
+            sock.sendto(build_ping(rid), SERVER)
+            try: sock.recvfrom(4096); rid += 1
+            except: pass
         time.sleep(1)
 
     if not solution:
-        print("    Failed after 5 attempts"); sock.close(); return
+        print("    Failed after 15 attempts"); sock.close(); return
 
     # Send CR+Login
     print(f"\n[3] Sending CR+Login...")
