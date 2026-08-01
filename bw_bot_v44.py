@@ -238,31 +238,39 @@ def main():
     except socket.timeout:
         print("TIMEOUT"); sock.close(); return
 
-    # Unencrypted login → challenge
-    print("[1] Login (unencrypted)...")
-    bf_key = os.urandom(56)
-    logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", random.randint(1, 0xFFFFFFFF))
-    login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon
-    elem = build_request_v16(0x00, rid, login_body)
-    sock.sendto(build_packet(elem, first_req=0), SERVER)
-    rid += 1
-    try:
-        data, _ = sock.recvfrom(4096)
-    except socket.timeout:
-        print("    TIMEOUT"); sock.close(); return
-    result = parse_reply(data)
-    if not result or result[0] != 0x42:
-        print(f"    No challenge: {result}"); sock.close(); return
-    key_prefix, max_nonce = parse_challenge(result[2])
-    header = key_prefix.decode('utf-8', errors='replace')
-    print(f"    Challenge: {header}, max_nonce: {max_nonce}")
+    # Retry loop for Cuckoo (sometimes no 42-cycle found)
+    solution = None
+    duration = 0
+    key_prefix = None
+    for cuckoo_attempt in range(1, 6):
+        print(f"\n[1] Login (unencrypted) — attempt {cuckoo_attempt}...")
+        bf_key = os.urandom(56)
+        logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", random.randint(1, 0xFFFFFFFF))
+        login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon
+        elem = build_request_v16(0x00, rid, login_body)
+        sock.sendto(build_packet(elem, first_req=0), SERVER)
+        rid += 1
+        try:
+            data, _ = sock.recvfrom(4096)
+        except socket.timeout:
+            print("    TIMEOUT"); sock.close(); return
+        result = parse_reply(data)
+        if not result or result[0] != 0x42:
+            print(f"    No challenge: {result}"); sock.close(); return
+        key_prefix, max_nonce = parse_challenge(result[2])
+        header = key_prefix.decode('utf-8', errors='replace')
+        print(f"    Challenge: {header}, max_nonce: {max_nonce}")
 
-    # Solve Cuckoo
-    print("[2] Solving Cuckoo...")
-    solution, duration = solve_cuckoo(header, max_nonce)
+        print(f"[2] Solving Cuckoo — attempt {cuckoo_attempt}...")
+        solution, duration = solve_cuckoo(header, max_nonce)
+        if solution and len(solution) == 42:
+            print(f"    Solved: {len(solution)} nonces, {duration:.1f}s")
+            break
+        print(f"    No 42-cycle, retrying with new challenge...")
+        time.sleep(1)
+
     if not solution or len(solution) != 42:
-        print("    No 42-cycle"); sock.close(); return
-    print(f"    Solved: {len(solution)} nonces, {duration:.1f}s")
+        print("    Failed after 5 attempts"); sock.close(); return
 
     # CR element (shared)
     cr_body = build_cr_body(duration, key_prefix, solution)
