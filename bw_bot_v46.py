@@ -259,7 +259,7 @@ def main():
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(5)
+    sock.settimeout(15)
     rid = 1
 
     print("[0] PING...", end=" ", flush=True)
@@ -327,11 +327,21 @@ def main():
     print(f"    CR body: duration={duration:.1f}, key_prefix_len={len(key_prefix)}, sol_count={len(solution)}")
     print(f"    CR body hex (first 40B): {cr_body[:40].hex()}")
     
-    sock.sendto(pkt, SERVER)
-    rid += 1
-
-    try:
-        data, _ = sock.recvfrom(4096)
+    # Send CR+Login with retry (UDP can drop)
+    for send_attempt in range(3):
+        sock.sendto(pkt, SERVER)
+        try:
+            data, _ = sock.recvfrom(4096)
+            break
+        except socket.timeout:
+            if send_attempt < 2:
+                print(f"    Timeout, retrying ({send_attempt+2}/3)...")
+                time.sleep(1)
+            else:
+                print(f"    All retries failed")
+    else:
+        data = None
+    
         result = parse_reply(data)
         if result:
             status, _, extra = result
