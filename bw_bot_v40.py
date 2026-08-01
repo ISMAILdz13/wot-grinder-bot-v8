@@ -49,12 +49,16 @@ def build_message_v16(elem_id, body):
     return struct.pack("<BH", elem_id, len(body)) + body
 
 def build_request_v16(elem_id, rid, body):
-    """REQUEST element: [id(1B)] [len(2B)] [rid(4B)] [next(2B=0)] [body]"""
+    """REQUEST element (Variable16): [id(1B)] [len(2B)] [rid(4B)] [next(2B=0)] [body]"""
     return struct.pack("<BH", elem_id, len(body)) + struct.pack("<IH", rid, 0) + body
 
+def build_request_fixed(elem_id, rid, body):
+    """REQUEST element (Fixed length, NO length field): [id(1B)] [rid(4B)] [next(2B=0)] [body]"""
+    return struct.pack("<B", elem_id) + struct.pack("<IH", rid, 0) + body
+
 def build_ping(rid):
-    """PING: element 0x02, Fixed(1)"""
-    return build_request_v16(0x02, rid, struct.pack("<B", 0))
+    """PING: element 0x02, Fixed(1) — NO length field!"""
+    return build_request_fixed(0x02, rid, struct.pack("<B", 0))
 
 # ============ Packed string encoding ============
 def pack_u24(n):
