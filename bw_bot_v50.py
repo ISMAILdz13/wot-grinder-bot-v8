@@ -68,9 +68,10 @@ def pack_str_u24(s):
 
 def build_logon_u32(bf_key):
     logon = struct.pack("<B", 0)
-    logon += pack_str_u32("guest")
-    logon += pack_str_u32("")
-    logon += pack_str_u32(bf_key)
+    logon += pack_str_u24("guest")
+    logon += pack_str_u24("")
+    logon += pack_str_u24(bf_key)
+    logon += pack_str_u24("")
     logon += struct.pack("<I", random.randint(1, 0xFFFFFFFF))
     return logon
 
@@ -211,7 +212,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  packed_u24 key (THE REAL FIX) + duration + prefix+counter")
+    print(f"  CUCKOO ACCEPTED! Fix LogOnParams: packed_u24 + context field")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
