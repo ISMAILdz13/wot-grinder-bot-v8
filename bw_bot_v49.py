@@ -16,7 +16,7 @@ from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import SHA1
 
 MASK64 = 0xFFFFFFFFFFFFFFFF
-SIZESHIFT=20; PROOFSIZE=42; SIZE=1<<SIZESHIFT; HALFSIZE=SIZE//2; NODEMASK=HALFSIZE-1; MAXPATHLEN=8192
+SIZESHIFT=20; PROOFSIZE=42; SIZE=1<<SIZESHIFT; HALFSIZE=SIZE//2; NODEMASK=HALFSIZE-1; EDGEMASK=SIZE-1; MAXPATHLEN=8192
 FLAG_HAS_REQUESTS = 0x0001
 
 def _prefix(raw):
@@ -128,7 +128,7 @@ def siphash24(ctx, n):
     for _ in range(4): v0,v1,v2,v3=sipround(v0,v1,v2,v3)
     return (v0^v1^v2^v3)&MASK64
 
-def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & NODEMASK
+def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & EDGEMASK
 
 # PARTITION BIT ENCODING (THE FIX):
 # U = sipnode * 2     (even, in [0, 2*NODEMASK])
@@ -138,7 +138,7 @@ def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & NODEMASK
 
 def solve_cuckoo(header, easiness):
     ctx = setheader(header)
-    ck = array.array('I', [0]*(SIZE+1))
+    ck = array.array('I', [0]*(2*SIZE+1))
     us = array.array('I', [0]*MAXPATHLEN); vs = array.array('I', [0]*MAXPATHLEN)
     t0 = time.time(); c = 0
     for n in range(easiness):
@@ -250,8 +250,8 @@ PROTOCOL = 285278213
 
 def main():
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v49 — Partition bit encoding (FIX)")
-    print(f"  U=sipnode*2, V=sipnode*2+1 (Tromp style)")
+    print(f"  WoT Bot v49 — EDGEMASK + Partition bit (THE REAL FIX)")
+    print(f"  sipnode uses &EDGEMASK not &NODEMASK. 20-bit nodes.")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
