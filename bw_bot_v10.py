@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""WoT Bot v10 — Big-endian Mercury protocol fields
-
-The BigWorld source uses BW_NTOHL/BW_NTOHS for Mercury fields (network byte order).
-We were sending LE — server reads huge length, can't find data, returns error 0x40.
-
-Fix: length, request_id, next_offset in BIG-ENDIAN. Body stays LE (host order).
-"""
+"""WoT Bot v10 fixed — Big-endian Mercury protocol fields"""
 import socket, struct, os, sys, time
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
@@ -37,31 +31,26 @@ def rsa_encrypt(plaintext, pem_key):
     return cipher.encrypt(plaintext)
 
 def build_v32_be(elem_id, rid, body):
-    """Build V32 request with BIG-ENDIAN Mercury fields (length, rid, next)."""
-    # request_id in BE, next in BE
-    rh = struct.pack(">I>H", rid, 0)  # BIG-ENDIAN!
+    """V32 with ALL Mercury fields in big-endian (length, request_id, next_offset)."""
+    rh = struct.pack(">I", rid) + struct.pack(">H", 0)  # BE request_id + BE next
     inner = rh + body
-    # length in BE (network byte order)
-    content = struct.pack("<B>I", elem_id, len(inner)) + inner  # Wait, struct.pack doesn't do mixed endianness easily
-    # Let me be explicit:
-    content = bytes([elem_id]) + struct.pack(">I", len(inner)) + inner  # ID(1B) + len(4B BE) + inner
-    # Packet: prefix(4B) + flags(2B LE) + content + footer(2B LE)
-    raw = struct.pack("<IH", 0, FLAGS['HAS_REQUESTS']) + content + struct.pack("<H", 2)
-    return struct.pack("<I", _prefix(raw)) + raw[4:]
-
-def build_v32_le(elem_id, rid, body):
-    """Build V32 request with LITTLE-ENDIAN Mercury fields (same as v9)."""
-    rh = struct.pack("<I<H", rid, 0)
-    inner = rh + body
-    content = struct.pack("<B", elem_id) + struct.pack("<I", len(inner)) + inner
+    content = bytes([elem_id]) + struct.pack(">I", len(inner)) + inner  # BE length
     raw = struct.pack("<IH", 0, FLAGS['HAS_REQUESTS']) + content + struct.pack("<H", 2)
     return struct.pack("<I", _prefix(raw)) + raw[4:]
 
 def build_v32_mixed(elem_id, rid, body):
-    """V32 with BE length but LE request_id/next (try both ways)."""
-    rh = struct.pack("<I<H", rid, 0)  # LE request_id
+    """V32 with BE length but LE request_id/next."""
+    rh = struct.pack("<I", rid) + struct.pack("<H", 0)  # LE request_id + LE next
     inner = rh + body
     content = bytes([elem_id]) + struct.pack(">I", len(inner)) + inner  # BE length, LE inner
+    raw = struct.pack("<IH", 0, FLAGS['HAS_REQUESTS']) + content + struct.pack("<H", 2)
+    return struct.pack("<I", _prefix(raw)) + raw[4:]
+
+def build_v32_le(elem_id, rid, body):
+    """V32 with ALL Mercury fields in little-endian (control — same as v9)."""
+    rh = struct.pack("<I", rid) + struct.pack("<H", 0)
+    inner = rh + body
+    content = bytes([elem_id]) + struct.pack("<I", len(inner)) + inner
     raw = struct.pack("<IH", 0, FLAGS['HAS_REQUESTS']) + content + struct.pack("<H", 2)
     return struct.pack("<I", _prefix(raw)) + raw[4:]
 
@@ -77,8 +66,8 @@ def parse_reply(data):
     if length >= 4:
         reply_id_le = struct.unpack("<I", reply_data[:4])[0]
         reply_id_be = struct.unpack(">I", reply_data[:4])[0]
-        result["reply_id_LE"] = f"0x{reply_id_le:08X}"
-        result["reply_id_BE"] = f"0x{reply_id_be:08X}"
+        result["rid_LE"] = f"0x{reply_id_le:08X}"
+        result["rid_BE"] = f"0x{reply_id_be:08X}"
         if length >= 5:
             status = reply_data[4]
             if status == 1: result["type"] = "SUCCESS"
@@ -90,9 +79,13 @@ def parse_reply(data):
                 except: result["message"] = reply_data[5:].hex()
     return result
 
+def make_logon(user="guest", pwd="", bf_key=None, nonce=0):
+    if bf_key is None: bf_key = os.urandom(16)
+    return struct.pack("<B", 0) + pack_str(user) + pack_str(pwd) + pack_str(bf_key) + struct.pack("<I", nonce)
+
 def run_v10(server="login.p1.worldoftanks.eu", port=20016, timeout=5):
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v10 — BE Mercury Fields — {server}:{port}")
+    print(f"  WoT Bot v10 FIXED — BE Mercury Fields — {server}:{port}")
     print(f"{'='*55}")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(timeout)
@@ -109,26 +102,18 @@ def run_v10(server="login.p1.worldoftanks.eu", port=20016, timeout=5):
         print(f"    ❌ PING timeout")
         sock.close(); return
 
-    def make_logon(user="guest", pwd="", bf_key=None, nonce=0):
-        if bf_key is None: bf_key = os.urandom(16)
-        params = struct.pack("<B", 0) + pack_str(user) + pack_str(pwd) + pack_str(bf_key) + struct.pack("<I", nonce)
-        return params
-
-    tests = [
-        # (description, builder_fn, body)
-    ]
+    tests = []
     
-    # BE Mercury fields with plain body
+    # BE Mercury fields + plain body (LE body)
     for proto in [51, 52, 55, 60]:
         bf = os.urandom(16)
         body = struct.pack("<I", proto) + make_logon(bf_key=bf)
-        tests.append((f"BE fields, plain, proto={proto}", build_v32_be, body))
+        tests.append((f"BE fields, plain LE body, proto={proto}", build_v32_be, body))
     
-    # BE Mercury fields with RSA
+    # BE Mercury fields + RSA
     for proto in [51, 52]:
         bf = os.urandom(16)
-        logon = make_logon(bf_key=bf)
-        rsa_data = rsa_encrypt(logon, KEY_WOT)
+        rsa_data = rsa_encrypt(make_logon(bf_key=bf), KEY_WOT)
         body = struct.pack("<I", proto) + rsa_data
         tests.append((f"BE fields, RSA WoT, proto={proto}", build_v32_be, body))
     
@@ -136,23 +121,23 @@ def run_v10(server="login.p1.worldoftanks.eu", port=20016, timeout=5):
     for proto in [51, 52]:
         bf = os.urandom(16)
         body = struct.pack("<I", proto) + make_logon(bf_key=bf)
-        tests.append((f"Mixed (BE len, LE rid), plain, proto={proto}", build_v32_mixed, body))
+        tests.append((f"Mixed BE-len/LE-rid, plain, proto={proto}", build_v32_mixed, body))
     
-    # LE fields (control — same as v9, should get error 0x40)
+    # LE fields (control — should get error 0x40)
     bf = os.urandom(16)
     body = struct.pack("<I", 51) + make_logon(bf_key=bf)
     tests.append((f"LE fields (control), plain, proto=51", build_v32_le, body))
     
-    # Also try: protocol version in BE too
+    # BE everything including protocol version
     for proto in [51, 52]:
         bf = os.urandom(16)
-        body = struct.pack(">I", proto) + make_logon(bf_key=bf)  # BE protocol!
+        body = struct.pack(">I", proto) + make_logon(bf_key=bf)
         tests.append((f"BE everything, plain, proto={proto}", build_v32_be, body))
 
     for desc, builder, body in tests:
         print(f"\n[2] {desc} (rid={rid})...")
         pkt = builder(0x01, rid, body)
-        print(f"    → {len(pkt)}B, first 40B: {pkt[:40].hex()}")
+        print(f"    → {len(pkt)}B")
         sock.sendto(pkt, (server, port))
         try:
             data, addr = sock.recvfrom(4096)
