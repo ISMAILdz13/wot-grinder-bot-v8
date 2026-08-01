@@ -37,7 +37,9 @@ def build_message_v16(elem_id, body):
     return struct.pack("<BH", elem_id, len(body)) + body
 
 def build_ping(rid):
-    return build_request_fixed(0x02, rid, struct.pack("<B", 0))
+    """PING: full packet with prefix+flags+footer"""
+    elem = build_request_fixed(0x02, rid, struct.pack("<B", 0))
+    return build_packet(elem, first_req=0)
 
 # === Packed string ===
 def pack_u24(n):
