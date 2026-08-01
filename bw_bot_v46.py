@@ -128,7 +128,13 @@ def siphash24(ctx, n):
 def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & NODEMASK
 
 def verify_cuckoo(key_prefix_bytes, solution):
-    """Local Cuckoo verification — same as server would do"""
+    """Local Cuckoo verification — proper cycle check
+    
+    In a valid 42-cycle:
+    - 42 edges, each connecting a U-node and V-node
+    - Each node appears in EXACTLY 2 edges (degree 2)
+    - Edges form a single connected cycle of length 42
+    """
     ctx = setheader(key_prefix_bytes)
     edges = []
     for nonce in solution:
@@ -136,40 +142,48 @@ def verify_cuckoo(key_prefix_bytes, solution):
         v = sipnode(ctx, nonce, 1) + HALFSIZE
         edges.append((u, v))
     
-    # Check uniqueness
-    nodes = set()
-    for u, v in edges:
-        if u in nodes: return False, f"Duplicate U-node {u}"
-        if v in nodes: return False, f"Duplicate V-node {v}"
-        nodes.add(u); nodes.add(v)
+    if len(edges) != PROOFSIZE:
+        return False, f"Wrong edge count: {len(edges)} != {PROOFSIZE}"
     
-    # Build adjacency: U -> V and V -> U
-    u_to_v = {}
-    v_to_u = {}
+    # Build adjacency: each node maps to its TWO neighbors
+    adj = {}
     for u, v in edges:
-        u_to_v[u] = v
-        v_to_u[v] = u
+        adj.setdefault(u, []).append(v)
+        adj.setdefault(v, []).append(u)
     
-    # Follow cycle: start from first edge's U, follow U->V->U->V...
-    start = edges[0][0]
-    current = start
-    length = 0
-    visited = set()
-    while current not in visited:
-        visited.add(current)
-        if current < HALFSIZE:
-            # U-node: go to V
-            if current not in u_to_v: return False, f"U-node {current} has no V"
-            current = u_to_v[current]
-        else:
-            # V-node: go to U
-            if current not in v_to_u: return False, f"V-node {current} has no U"
-            current = v_to_u[current]
+    # Check every node has exactly degree 2
+    for node, neighbors in adj.items():
+        if len(neighbors) != 2:
+            return False, f"Node {node} has degree {len(neighbors)} (expected 2)"
+    
+    # Follow the cycle from first edge
+    start_u, start_v = edges[0]
+    current = start_v  # Start from V-node of first edge
+    prev = start_u
+    length = 1
+    visited_edges = {(start_u, start_v), (start_v, start_u)}
+    
+    while length < PROOFSIZE:
+        # From current node, find the next edge (not the one we came from)
+        neighbors = adj[current]
+        next_node = neighbors[0] if neighbors[1] == prev else neighbors[1]
+        
+        if (current, next_node) in visited_edges:
+            return False, f"Revisited edge at length {length}"
+        visited_edges.add((current, next_node))
+        visited_edges.add((next_node, current))
+        
+        prev = current
+        current = next_node
         length += 1
+        
+        if current == start_u and length == PROOFSIZE:
+            # Cycle closes!
+            return True, f"Valid 42-cycle! {len(edges)} edges, {len(adj)} nodes"
+        elif current == start_u:
+            return False, f"Cycle closes early at length {length}"
     
-    if current != start: return False, f"Cycle doesn't close ({length} edges)"
-    if length != PROOFSIZE: return False, f"Cycle length {length} != {PROOFSIZE}"
-    return True, f"Valid 42-cycle ({len(edges)} edges)"
+    return False, f"Cycle didn't close after {length} edges"
 
 def solve_cuckoo(header, easiness):
     ctx = setheader(header)
