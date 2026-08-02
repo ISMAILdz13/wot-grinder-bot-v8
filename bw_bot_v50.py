@@ -182,18 +182,18 @@ def sipnode(ctx, n, u): return siphash24(ctx, 2*n+u) & NODEMASK
 # u0 += 1; v0 += 1 + HALFSIZE;
 
 # ===== FAST C CUCKOO SOLVER (10x faster) =====
-import ctypes, subprocess as _sp, os as _os2
+import ctypes, subprocess, os
 
 _cuckoo_lib = None
 def _load_c_solver():
     global _cuckoo_lib
     if _cuckoo_lib is not None: return _cuckoo_lib
-    src = _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)), 'cuckoo_fast.c')
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cuckoo_fast.c')
     lib = src.replace('.c', '.so')
     if not _os2.exists(lib):
         for cc in ['gcc', 'clang', 'cc']:
-            ret = _sp.call([cc, '-O3', '-shared', '-fPIC', '-o', lib, src],
-                          stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            ret = subprocess.call([cc, '-O3', '-shared', '-fPIC', '-o', lib, src],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if ret == 0: break
     if _os2.exists(lib):
         try:
