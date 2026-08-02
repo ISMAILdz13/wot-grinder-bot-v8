@@ -1,44 +1,41 @@
 import os
 import socket
+import time
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 WOT_SERVER = ("login.p1.worldoftanks.eu", 20016)
 
+# Persistent socket — same source port for all packets
+_sock = None
+_peer = None
+
+def get_socket():
+    global _sock
+    if _sock is None or _sock.fileno() == -1:
+        _sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        _sock.settimeout(30)
+    return _sock
+
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy"})
-
-@app.route("/ping", methods=["POST"])
-def ping():
-    """Send PING to WoT server, return response."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(10)
-    try:
-        packet = bytes.fromhex(request.json.get("packet", ""))
-        sock.sendto(packet, WOT_SERVER)
-        data, addr = sock.recvfrom(4096)
-        return jsonify({"ok": True, "hex": data.hex(), "len": len(data)})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-    finally:
-        sock.close()
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v2"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
-    """Send arbitrary UDP packet to WoT server, wait for response."""
+    """Send packet via persistent socket, wait for response."""
+    global _peer
     data = request.json or {}
     packet_hex = data.get("packet", "")
     timeout_s = data.get("timeout", 30)
-    server_host = data.get("host", WOT_SERVER[0])
-    server_port = data.get("port", WOT_SERVER[1])
     
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = get_socket()
     sock.settimeout(timeout_s)
     try:
         packet = bytes.fromhex(packet_hex)
-        sock.sendto(packet, (server_host, server_port))
+        sock.sendto(packet, WOT_SERVER)
+        _peer = WOT_SERVER
         
         responses = []
         while True:
@@ -54,8 +51,18 @@ def send_packet():
         return jsonify({"ok": False, "error": "timeout"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
-    finally:
-        sock.close()
+
+@app.route("/reset", methods=["POST"])
+def reset_socket():
+    """Close and recreate socket (new source port)."""
+    global _sock
+    try:
+        if _sock:
+            _sock.close()
+    except:
+        pass
+    _sock = None
+    return jsonify({"ok": True, "msg": "socket reset"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
