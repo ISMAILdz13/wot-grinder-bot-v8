@@ -299,17 +299,22 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v71: Render proxy URL fixed = wot-grinder-bot.onrender.com")
+    print(f"  v72: ALL packets via proxy same socket — server matches challenge")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(45)
     rid = 1
+    login_nonce = random.randint(1, 0xFFFFFFFF)
 
+    # Reset proxy socket first (fresh source port)
+    proxy_reset()
+
+    # [0] PING via proxy
     print("[0] PING...", end=" ", flush=True)
-    sock.sendto(build_ping(rid), SERVER)
-    try: sock.recvfrom(4096); print("OK"); rid += 1
-    except socket.timeout: print("TIMEOUT"); sock.close(); return
+    pdata = proxy_send(build_ping(rid), timeout=10)
+    if pdata: print("OK"); rid += 1
+    else: print("FAIL"); return
 
     solution = None; key_str = None; bf_key = None; solve_time = 0
     for attempt in range(1, 16):
@@ -318,22 +323,34 @@ def main():
         logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce)
         login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon
         elem = build_request_v16(0x00, rid, login_body)
-        sock.sendto(build_packet(elem, first_req=0), SERVER)
+        
+        # Send first login via PROXY (same socket as PING)
+        pdata = proxy_send(build_packet(elem, first_req=0), timeout=15)
         rid += 1
-        try: data, _ = sock.recvfrom(4096)
-        except socket.timeout: print("    TIMEOUT"); sock.close(); return
-        result = parse_reply(data)
+        if not pdata:
+            print("    TIMEOUT — proxy error")
+            proxy_reset()
+            time.sleep(1)
+            continue
+        
+        result = parse_reply(pdata)
         if not result or result[0] != 0x42:
-            print(f"    No challenge: {result}"); sock.close(); return
+            print(f"    No challenge: status=0x{result[0]:02X if result else 0}")
+            if result and result[2]:
+                try: print(f"    Msg: {result[2].decode('utf-8', errors='replace')[:200]}")
+                except: pass
+            proxy_reset()
+            time.sleep(1)
+            continue
+        
         key_prefix, max_nonce = parse_challenge(result[2])
         prefix_str = key_prefix.decode('utf-8', errors='replace')
         print(f"    prefix: {prefix_str}, max_nonce: {max_nonce}")
 
-        # Try prefix+"0", prefix+"1", etc. until solution found (BigWorld style)
+        # Try prefix+"0", prefix+"1", etc.
         for counter in range(3):
             key_str = f"{prefix_str}{counter}"
             print(f"\n[2] Solving Cuckoo (key={key_str})...")
-            # Try C solver first (10x faster), fall back to Python
             if _c_compiled:
                 solution, solve_time = solve_cuckoo_c(key_str, max_nonce)
                 if solution:
@@ -348,64 +365,35 @@ def main():
         if solution and len(solution) == 42:
             break
         
-        print("    No solution, reopening socket...")
-        sock.close()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(45)
-        sock.sendto(build_ping(rid), SERVER)
-        try: sock.recvfrom(4096); rid += 1
-        except: pass
+        print("    No solution, resetting proxy socket...")
+        proxy_reset()
+        pdata = proxy_send(build_ping(rid), timeout=10)
+        if pdata: rid += 1
         time.sleep(1)
 
     if not solution or len(solution) != 42:
-        print("    Failed after 15 attempts"); sock.close(); return
+        print("    Failed after 15 attempts")
+        proxy_reset()
+        return
 
-    # CR body: NO DURATION! Just key + 42 nonces
-    print(f"\n[3] Sending CR+Login (NO duration, key={key_str})...")
+    # CR + Login
+    print(f"\n[3] Sending CR+Login (key={key_str})...")
     cr_body = build_cr_body(solve_time, key_str, solution)
     cr_elem = build_message_v16(0x03, cr_body)
     login_body = build_login_noflag(PROTOCOL, bf_key, KEY_BW)
     login_elem = build_request_v16(0x00, rid, login_body)
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
-    print(f"    CR body={len(cr_body)}B (duration=4B + key_packed_u24={1+len(key_str)}B + 42×4B = {4+1+len(key_str)+168}B)")
-    print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B (body={len(login_body)}B), Packet={len(pkt)}B")
-    # Direct send — UNENCRYPTED login bypasses RSA key issue
-    got_response = False
-    data = None
-    sock.settimeout(15)
-
-    print(f"    [SEND] Packet={len(pkt)}B (CR={len(cr_elem)}B + Login={len(login_elem)}B, body={len(login_body)}B)")
-    # Send CR+Login through Render.com UDP proxy (bypasses WARP!)
-    import urllib.request, json as jmod
-    PROXY_URL = os.environ.get("RENDER_URL", "https://wot-grinder-bot.onrender.com")
-    proxy_body = jmod.dumps({
-        "packet": pkt.hex(),
-        "host": SERVER[0],
-        "port": SERVER[1],
-        "timeout": 60
-    }).encode()
-
-    print(f"    [PROXY] Sending {len(pkt)}B via {PROXY_URL}...")
-    got_response = False
-    try:
-        proxy_req = urllib.request.Request(PROXY_URL + "/send", data=proxy_body, method="POST",
-            headers={"Content-Type": "application/json"})
-        proxy_resp = urllib.request.urlopen(proxy_req, timeout=90)
-        rj = jmod.loads(proxy_resp.read())
-        if rj.get("ok") and rj.get("responses"):
-            resp = rj["responses"][0]
-            data = bytes.fromhex(resp["hex"])
-            print(f"    [PROXY] Got response! {len(data)}B from {resp['from']}")
-            print(f"    [PROXY] Hex: {resp['hex'][:200]}")
-            got_response = True
-        else:
-            print(f"    [PROXY] No response: {rj.get('error', rj)}")
-    except Exception as e:
-        print(f"    [PROXY] Error: {e}")
-
-    if got_response:
-        result = parse_reply(data)
+    print(f"    CR body={len(cr_body)}B, Login body={len(login_body)}B, Packet={len(pkt)}B")
+    
+    # Send CR+Login via PROXY (SAME socket as PING + first login!)
+    print(f"    [PROXY] Sending {len(pkt)}B via proxy (same socket)...")
+    pdata = proxy_send(pkt, timeout=60)
+    
+    if pdata:
+        print(f"    [PROXY] Got response! {len(pdata)}B")
+        print(f"    [PROXY] Hex: {pdata.hex()[:200]}")
+        result = parse_reply(pdata)
         if result:
             status, _, extra = result
             print(f"    Status: 0x{status:02X}")
@@ -420,30 +408,12 @@ def main():
             elif status == 0x40: print("    -> destream")
             else: print(f"    -> NEW: 0x{status:02X}")
         else:
-            print("    Can't parse response")
+            print("    Can't parse response — raw hex:")
+            print(f"    {pdata.hex()}")
     else:
-        # Fallback: try direct UDP too
-        print("    [DIRECT] Trying direct UDP as fallback...")
-        sock.settimeout(15)
-        sock.sendto(pkt, SERVER)
-        try:
-            data, addr = sock.recvfrom(4096)
-            print(f"    [DIRECT] Got {len(data)}B from {addr}")
-            result = parse_reply(data)
-            if result:
-                status, _, extra = result
-                print(f"    Status: 0x{status:02X}")
-        except socket.timeout:
-            print("    [DIRECT] Timeout")
-        # PING check
-        sock.settimeout(10)
-        sock.sendto(build_ping(rid+99), SERVER)
-        try:
-            pdata, _ = sock.recvfrom(4096)
-            print(f"    [PING] Server alive! {len(pdata)}B")
-        except:
-            print("    [PING] No response")
-
+        print("    [PROXY] No response (timeout)")
+    
+    proxy_reset()
     sock.close()
     print("\nDone.")
     print("\nDone.")
