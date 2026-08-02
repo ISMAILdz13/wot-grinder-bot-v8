@@ -81,7 +81,9 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
     logon = build_logon_u32(bf_key)
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
-    return struct.pack("<I", protocol) + cipher.encrypt(logon)
+    encrypted = cipher.encrypt(logon)
+    # wg-toolkit-rs: write_blob_variable(encrypted_data) = packed_u24(len) + data
+    return struct.pack("<I", protocol) + pack_u24(len(encrypted)) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -214,7 +216,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  30s timeout + same nonce both logins + packed_u24 LogOnParams")
+    print(f"  RSA data with packed_u24 length prefix (THE 0x40 FIX)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -278,7 +280,7 @@ def main():
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
     print(f"    CR body={len(cr_body)}B (duration=4B + key_packed_u24={1+len(key_str)}B + 42×4B = {4+1+len(key_str)+168}B)")
-    print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B, Packet={len(pkt)}B")
+    print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B (body={len(login_body)}B), Packet={len(pkt)}B")
 
     got_response = False
     for sa in range(3):
