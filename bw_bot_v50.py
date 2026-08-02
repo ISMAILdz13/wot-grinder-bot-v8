@@ -114,12 +114,16 @@ def build_logon_u32(bf_key):
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
     # LogOnParams — SAME format as first unencrypted login (packed_u24 + context)
-    logon = struct.pack("<B", 0)  # flags
-    logon += pack_str_u24("guest")
-    logon += pack_str_u24("")
-    logon += pack_str_u24(bf_key)
-    logon += pack_str_u24("")  # context (same as unencrypted login)
-    logon += struct.pack("<I", login_nonce)  # nonce
+    # v44 CONFIRMED: u32 strings + NO context = server parses OK (got 0x55)
+    # C++ BigWorld BinaryStream << string = u32(len) + data, NO context field
+    def s32(s):
+        if isinstance(s, str): s = s.encode()
+        return struct.pack("<I", len(s)) + s
+    logon = struct.pack("<B", 0)   # flags
+    logon += s32("guest")          # username
+    logon += s32("")               # password
+    logon += s32(bf_key)           # encryption key (56 bytes)
+    logon += struct.pack("<I", login_nonce)  # nonce (NO context!)
 
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
@@ -303,7 +307,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: Encrypted login = protocol(4B) + RSA(256B) — NO flag, NO prefix (v44 confirmed)")
+    print(f"  FIX: v44 format — u32 strings + NO context (C++ BigWorld BinaryStream)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
