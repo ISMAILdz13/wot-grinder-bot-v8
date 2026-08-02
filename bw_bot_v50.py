@@ -299,7 +299,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v70: Render.com UDP proxy — bypass WARP entirely")
+    print(f"  v71: Render proxy URL fixed = wot-grinder-bot.onrender.com")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -378,7 +378,7 @@ def main():
     print(f"    [SEND] Packet={len(pkt)}B (CR={len(cr_elem)}B + Login={len(login_elem)}B, body={len(login_body)}B)")
     # Send CR+Login through Render.com UDP proxy (bypasses WARP!)
     import urllib.request, json as jmod
-    PROXY_URL = os.environ.get("RENDER_URL", "https://wot-udp-proxy.onrender.com")
+    PROXY_URL = os.environ.get("RENDER_URL", "https://wot-grinder-bot.onrender.com")
     proxy_body = jmod.dumps({
         "packet": pkt.hex(),
         "host": SERVER[0],
