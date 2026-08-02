@@ -22,6 +22,33 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import SHA1
 
+# ===== RENDER.COM UDP PROXY (bypasses WARP/ISP) =====
+PROXY_URL = "https://wot-grinder-bot.onrender.com"
+
+def proxy_send(pkt, timeout=30):
+    import urllib.request, json as jmod
+    body = jmod.dumps({"packet": pkt.hex(), "timeout": timeout}).encode()
+    req = urllib.request.Request(PROXY_URL + "/send", data=body, method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout+15)
+        rj = jmod.loads(resp.read())
+        if rj.get("ok") and rj.get("responses"):
+            return bytes.fromhex(rj["responses"][0]["hex"])
+        print(f"    [PROXY] No response: {rj.get('error','?')}")
+        return None
+    except Exception as e:
+        print(f"    [PROXY] Error: {e}")
+        return None
+
+def proxy_reset():
+    import urllib.request
+    try:
+        urllib.request.urlopen(urllib.request.Request(PROXY_URL + "/reset",
+            data=b"{}", method="POST", headers={"Content-Type":"application/json"}), timeout=10)
+    except: pass
+
+
 # ===== FAST C CUCKOO SOLVER (10x faster than pure Python) =====
 import ctypes, subprocess, os as os, tempfile as _tf
 
