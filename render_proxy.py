@@ -64,5 +64,34 @@ def reset_socket():
     _sock = None
     return jsonify({"ok": True, "msg": "socket reset"})
 
+
+
+@app.route("/fetch", methods=["POST"])
+def fetch_url():
+    """Fetch a file from any URL (Render has full internet access)."""
+    import urllib.request
+    import ssl
+    data = request.json or {}
+    url = data.get("url", "")
+    if not url:
+        return jsonify({"ok": False, "error": "no url"})
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers={"User-Agent": "Wargaming Game Center"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        content = resp.read()
+        return jsonify({
+            "ok": True,
+            "status": resp.status,
+            "content": content.hex(),
+            "text": content.decode("utf-8", errors="replace")[:2000],
+            "size": len(content)
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "url": url})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
