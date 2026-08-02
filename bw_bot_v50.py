@@ -69,12 +69,15 @@ def pack_str_u24(s):
 login_nonce = random.randint(1, 0xFFFFFFFF)
 
 def build_logon_u32(bf_key):
-    logon = struct.pack("<B", 0)
-    logon += pack_str_u24("guest")
-    logon += pack_str_u24("")
-    logon += pack_str_u24(bf_key)
-    logon += pack_str_u24("")
-    logon += struct.pack("<I", login_nonce)
+    # C++ BinaryStream << string = u32(len) + data (NOT packed_u24!)
+    def s32(s):
+        if isinstance(s, str): s = s.encode()
+        return struct.pack("<I", len(s)) + s
+    logon = struct.pack("<B", 0)   # flags
+    logon += s32("guest")          # username
+    logon += s32("")               # password
+    logon += s32(bf_key)           # encryption key (56 bytes)
+    logon += struct.pack("<I", login_nonce)  # nonce (NO context field in C++)
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
@@ -82,8 +85,8 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
     encrypted = cipher.encrypt(logon)
-    # wg-toolkit-rs: write_blob_variable(encrypted_data) = packed_u24(len) + data
-    return struct.pack("<I", protocol) + pack_u24(len(encrypted)) + encrypted
+    # C++ BigWorld: addBlob(data, size) = u32(len) + data
+    return struct.pack("<I", protocol) + struct.pack("<I", len(encrypted)) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -216,7 +219,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  RSA data with packed_u24 length prefix (THE 0x40 FIX)")
+    print(f"  FIX: C++ u32 strings in LogOnParams + u32 RSA blob prefix")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
