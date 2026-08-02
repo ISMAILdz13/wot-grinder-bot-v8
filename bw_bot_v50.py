@@ -321,6 +321,17 @@ YB60u6lK9cvDEeuhPH95TPpzLNUFgmQIu9FU8PkcKA53bj0LWZR7v86Oco6vFg6V
 sQIDAQAB
 -----END PUBLIC KEY-----"""
 
+KEY_WOT = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyjeVAXWfhj02sEGd8BnK
+Z2y8Twnwefea2R3QulJurdD0lmFPyczP2Z54Lju7TAMYtJ4o02MTkm2BKtmd7WOt
+yFxyVEDdRH65D2PK2bEzptve6JoBQD9uZQZn3Vi4MmMzrlWkkF9NkJ84A45ZxocN
+M8oLTjfhdkLvDMvvG1h8oc4KAD9uGv3FRgQSkIZtD5ro+stOvQiiDj4OQd5o9+M0
+JS36ks1C69vjMsOWC+gFH/rdDEEoFOwGIM6Q8iTYb2rjHeyAP2fNPGf+X7l73+yV
+s7lm2Bh2WezlZSDikycb1r3FvB4wUhohahwfuORGdMtxidzIQzNdcFo0Gg+dg7wc
+hwIDAQAB
+-----END PUBLIC KEY-----"""
+
+
 SERVER_HOST = "login.p1.worldoftanks.eu"
 SERVER_PORT = 20016
 SERVER = (SERVER_HOST, SERVER_PORT)
@@ -329,7 +340,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v73: RSA-encrypted login via proxy — unencrypted rejected, must use RSA")
+    print(f"  v74: Try KEY_WOT (different from KEY_BW default) — may be real WoT production key")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -410,7 +421,7 @@ def main():
     print(f"\n[3] Sending CR+Login (key={key_str})...")
     cr_body = build_cr_body(solve_time, key_str, solution)
     cr_elem = build_message_v16(0x03, cr_body)
-    login_body = build_login_noflag(PROTOCOL, bf_key, KEY_BW)
+    login_body = build_login_noflag(PROTOCOL, bf_key, KEY_WOT)
     login_elem = build_request_v16(0x00, rid, login_body)
     content = cr_elem + login_elem
     pkt = build_packet(content, first_req=len(cr_elem))
