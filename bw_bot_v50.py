@@ -325,8 +325,14 @@ def main():
         # Try prefix+"0", prefix+"1", etc. until solution found (BigWorld style)
         for counter in range(3):
             key_str = f"{prefix_str}{counter}"
-            print(f"[2] Solving Cuckoo (key={key_str})...")
-            solution, solve_time = solve_cuckoo(key_str, max_nonce)
+            print(f"\n[2] Solving Cuckoo (key={key_str})...")
+            # Try C solver first (10x faster), fall back to Python
+            if _c_compiled:
+                solution, solve_time = solve_cuckoo_c(key_str, max_nonce)
+                if solution:
+                    print(f"    [C] FOUND 42-cycle in {solve_time:.1f}s!")
+            else:
+                solution, solve_time = solve_cuckoo(key_str, max_nonce)
             if solution and len(solution) == 42:
                 print(f"    Solved with counter={counter}: {len(solution)} nonces, {solve_time:.1f}s")
                 break
