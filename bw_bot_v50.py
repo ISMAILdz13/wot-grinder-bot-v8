@@ -113,12 +113,22 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    logon = build_logon_u32(bf_key)
+    # LogOnParams — SAME format as first unencrypted login (packed_u24 + context)
+    logon = struct.pack("<B", 0)  # flags
+    logon += pack_str_u24("guest")
+    logon += pack_str_u24("")
+    logon += pack_str_u24(bf_key)
+    logon += pack_str_u24("")  # context (same as unencrypted login)
+    logon += struct.pack("<I", login_nonce)  # nonce
+
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
     encrypted = cipher.encrypt(logon)
-    # C++ BigWorld: addBlob(data, size) = u32(len) + data
-    return struct.pack("<I", protocol) + struct.pack("<I", len(encrypted)) + encrypted
+
+    # Format: [protocol(4B)] [flag=0x01] [packed_u24(RSA_len)] [RSA_data(256B)]
+    # Flag 0x01 = encrypted (server reads this byte: 0=unencrypted, nonzero=encrypted)
+    # packed_u24 = variable-length blob size (matches wg-toolkit-rs write_blob_variable)
+    return struct.pack("<I", protocol) + struct.pack("<B", 1) + pack_u24(len(encrypted)) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -292,7 +302,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: C++ u32 strings in LogOnParams + u32 RSA blob prefix")
+    print(f"  FIX: Encrypted login = flag(0x01) + packed_u24 RSA blob + packed_u24 LogOnParams")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
