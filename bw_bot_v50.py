@@ -483,7 +483,7 @@ def main():
                 login_nonce_new = random.randint(1, 0xFFFFFFFF)
                 logon2 = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce_new)
                 lb2 = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon2
-                elem2 = build_request_v16(0x00, rid, login_body=lb2)
+                elem2 = build_request_v16(0x00, rid, lb2)
                 pdata3 = proxy_send(build_packet(elem2, first_req=0), timeout=15)
                 rid += 1
                 if pdata3:
