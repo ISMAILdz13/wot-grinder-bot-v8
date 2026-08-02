@@ -19,7 +19,7 @@ Our original solver was correct, but the CR body and key were wrong!
 """
 import socket, struct, os, hashlib, time, array, random
 from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Cipher import PKCS1_OAEP, PKCS1_v1_5
 from Crypto.Hash import SHA1
 
 # ===== RENDER.COM UDP PROXY (bypasses WARP/ISP) =====
@@ -140,21 +140,27 @@ def build_logon_u32(bf_key):
     logon += struct.pack("<I", login_nonce)  # nonce (NO context field in C++)
     return logon
 
-def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # RSA-encrypted login — C++ BigWorld format (NO flag byte)
-    # Server requires RSA encryption (unencrypted not allowed)
-    # LogOnParams: flags(1B) + pu24(user) + pu24(pwd) + pu24(bfkey) + u32(nonce)
-    # NO context field (C++ BigWorld doesn't have it)
+def build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=False):
+    """RSA-encrypted login with configurable context and padding."""
     logon = struct.pack("<B", 0)
     logon += pack_str_u24("guest")
     logon += pack_str_u24("")
     logon += pack_str_u24(bf_key)
+    if use_context:
+        logon += pack_str_u24("")  # context field
     logon += struct.pack("<I", login_nonce)
-    # RSA OAEP-SHA1 encrypt
     key = RSA.importKey(rsa_key_pem)
-    cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
-    encrypted = cipher.encrypt(logon)
+    if use_pkcs1:
+        cipher = PKCS1_v1_5.new(key)
+        encrypted = cipher.encrypt(logon)
+    else:
+        cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
+        encrypted = cipher.encrypt(logon)
     return struct.pack("<I", protocol) + encrypted
+
+def build_login_noflag(protocol, bf_key, rsa_key_pem):
+    # Default: OAEP-SHA1, no context
+    return build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=False)
 
 
 def build_cr_body(duration, key_str, solution):
@@ -340,7 +346,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v74: Try KEY_WOT (different from KEY_BW default) — may be real WoT production key")
+    print(f"  v75: Try ALL combos: BW/WOT × OAEP/PKCS1 × with/without context field")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -417,47 +423,95 @@ def main():
         proxy_reset()
         return
 
-    # CR + Login
+# CR + Login — try multiple RSA key/format combinations
     print(f"\n[3] Sending CR+Login (key={key_str})...")
     cr_body = build_cr_body(solve_time, key_str, solution)
     cr_elem = build_message_v16(0x03, cr_body)
-    login_body = build_login_noflag(PROTOCOL, bf_key, KEY_WOT)
-    login_elem = build_request_v16(0x00, rid, login_body)
-    content = cr_elem + login_elem
-    pkt = build_packet(content, first_req=len(cr_elem))
-    print(f"    CR body={len(cr_body)}B, Login body={len(login_body)}B, Packet={len(pkt)}B")
     
-    # Send CR+Login via PROXY (SAME socket as PING + first login!)
-    print(f"    [PROXY] Sending {len(pkt)}B via proxy (same socket)...")
-    pdata = proxy_send(pkt, timeout=60)
+    # Combinations to try: (key_name, key, use_context, use_pkcs1)
+    combos = [
+        ("KEY_BW+OAEP+ctx", KEY_BW, True, False),
+        ("KEY_WOT+OAEP+ctx", KEY_WOT, True, False),
+        ("KEY_BW+PKCS1", KEY_BW, False, True),
+        ("KEY_WOT+PKCS1", KEY_WOT, False, True),
+        ("KEY_BW+PKCS1+ctx", KEY_BW, True, True),
+        ("KEY_WOT+PKCS1+ctx", KEY_WOT, True, True),
+    ]
     
-    if pdata:
-        print(f"    [PROXY] Got response! {len(pdata)}B")
-        print(f"    [PROXY] Hex: {pdata.hex()[:200]}")
-        result = parse_reply(pdata)
-        if result:
-            status, _, extra = result
-            print(f"    Status: 0x{status:02X}")
-            print(f"    Raw extra ({len(extra)}B): {extra[:100].hex()}")
-            try: msg = extra.decode("utf-8", errors="replace")[:200]
-            except: msg = ""
-            if msg.strip(): print(f"    Message: {msg}")
-            if status == 0x01: print("    === LOGIN SUCCESS! ===")
-            elif status == 0x47: print("    -> Invalid User")
-            elif status == 0x48: print("    -> Invalid Password")
-            elif status == 0x55: print("    -> Failed login challenge")
-            elif status == 0x40: print("    -> destream")
-            else: print(f"    -> NEW: 0x{status:02X}")
+    for combo_name, rsa_key, use_ctx, use_pkcs1 in combos:
+        login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, use_context=use_ctx, use_pkcs1=use_pkcs1)
+        login_elem = build_request_v16(0x00, rid, login_body)
+        content = cr_elem + login_elem
+        pkt = build_packet(content, first_req=len(cr_elem))
+        
+        print(f"\n  [{combo_name}] Login body={len(login_body)}B, Packet={len(pkt)}B")
+        print(f"  [PROXY] Sending {len(pkt)}B via proxy...")
+        pdata = proxy_send(pkt, timeout=30)
+        
+        if pdata:
+            print(f"  [PROXY] Got response! {len(pdata)}B")
+            print(f"  [PROXY] Hex: {pdata.hex()[:200]}")
+            result = parse_reply(pdata)
+            if result:
+                status, _, extra = result
+                print(f"  Status: 0x{status:02X}")
+                try: msg = extra.decode("utf-8", errors="replace")[:200]
+                except: msg = ""
+                if msg.strip(): print(f"  Message: {msg}")
+                if status == 0x01:
+                    print("  === LOGIN SUCCESS! ===")
+                    proxy_reset()
+                    sock.close()
+                    print("\nDone.")
+                    return
+                elif status == 0x47: print("  -> Invalid User")
+                elif status == 0x48: print("  -> Invalid Password")
+                elif status == 0x55: print("  -> Failed login challenge")
+                elif status == 0x40: print("  -> destream")
+                else: print(f"  -> NEW: 0x{status:02X}")
+            else:
+                print("  Can't parse — raw hex:")
+                print(f"  {pdata.hex()}")
+            
+            # If we got a non-success response, we need a new challenge for next combo
+            if combo_name != combos[-1][0]:
+                print("  Getting new challenge for next combo...")
+                proxy_reset()
+                pdata2 = proxy_send(build_ping(rid), timeout=10)
+                if pdata2: rid += 1
+                # New login to get new challenge
+                login_nonce_new = random.randint(1, 0xFFFFFFFF)
+                logon2 = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce_new)
+                lb2 = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon2
+                elem2 = build_request_v16(0x00, rid, login_body=lb2)
+                pdata3 = proxy_send(build_packet(elem2, first_req=0), timeout=15)
+                rid += 1
+                if pdata3:
+                    r3 = parse_reply(pdata3)
+                    if r3 and r3[0] == 0x42:
+                        key_prefix, max_nonce = parse_challenge(r3[2])
+                        prefix_str = key_prefix.decode('utf-8', errors='replace')
+                        print(f"  New prefix: {prefix_str}")
+                        # Solve new Cuckoo
+                        for counter in range(3):
+                            key_str = f"{prefix_str}{counter}"
+                            if _c_compiled:
+                                solution, solve_time = solve_cuckoo_c(key_str, max_nonce)
+                            else:
+                                solution, solve_time = solve_cuckoo(key_str, max_nonce)
+                            if solution and len(solution) == 42:
+                                print(f"  Solved: counter={counter}, {solve_time:.1f}s")
+                                cr_body = build_cr_body(solve_time, key_str, solution)
+                                cr_elem = build_message_v16(0x03, cr_body)
+                                break
         else:
-            print("    Can't parse response — raw hex:")
-            print(f"    {pdata.hex()}")
-    else:
-        print("    [PROXY] No response (timeout)")
+            print("  [PROXY] No response (timeout)")
+            if combo_name != combos[-1][0]:
+                proxy_reset()
+                time.sleep(1)
     
     proxy_reset()
     sock.close()
-    print("\nDone.")
-    print("\nDone.")
     print("\nDone.")
 
 if __name__ == "__main__":
