@@ -1,13 +1,15 @@
 import os
 import socket
 import time
+import urllib.request
+import urllib.error
+import ssl
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 WOT_SERVER = ("login.p1.worldoftanks.eu", 20016)
 
-# Persistent socket — same source port for all packets
 _sock = None
 _peer = None
 
@@ -20,11 +22,10 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v2"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v3"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
-    """Send packet via persistent socket, wait for response."""
     global _peer
     data = request.json or {}
     packet_hex = data.get("packet", "")
@@ -54,7 +55,6 @@ def send_packet():
 
 @app.route("/reset", methods=["POST"])
 def reset_socket():
-    """Close and recreate socket (new source port)."""
     global _sock
     try:
         if _sock:
@@ -64,13 +64,8 @@ def reset_socket():
     _sock = None
     return jsonify({"ok": True, "msg": "socket reset"})
 
-
-
 @app.route("/fetch", methods=["POST"])
 def fetch_url():
-    """Fetch a file from any URL (Render has full internet access)."""
-    import urllib.request
-    import ssl
     data = request.json or {}
     url = data.get("url", "")
     if not url:
@@ -86,11 +81,87 @@ def fetch_url():
             "ok": True,
             "status": resp.status,
             "content": content.hex(),
-            "text": content.decode("utf-8", errors="replace")[:2000],
+            "text": content.decode("utf-8", errors="replace")[:5000],
             "size": len(content)
+        })
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        return jsonify({
+            "ok": False,
+            "status": e.code,
+            "error": str(e),
+            "body": body.decode("utf-8", errors="replace")[:2000],
+            "size": len(body)
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "url": url})
+
+@app.route("/cdn", methods=["POST"])
+def cdn_fetch():
+    """Try to fetch loginapp_wot.pubkey from WoT CDN with many URL patterns."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    
+    domains = [
+        "http://dl-wot-gc.wargaming.net",
+        "http://content.wargaming.net",
+    ]
+    
+    paths = [
+        "/wot/eu/res/loginapp_wot.pubkey",
+        "/wot/eu/loginapp_wot.pubkey",
+        "/wot/loginapp_wot.pubkey",
+        "/wot/res/loginapp_wot.pubkey",
+        "/loginapp_wot.pubkey",
+        "/res/loginapp_wot.pubkey",
+        "/wot/eu/files/client/loginapp_wot.pubkey",
+        "/wot/eu/files/loginapp_wot.pubkey",
+        "/wot/eu/files/client/res/loginapp_wot.pubkey",
+        "/wot/eu/files/res/loginapp_wot.pubkey",
+        "/bigworld/res/loginapp_wot.pubkey",
+        "/wot/eu/bigworld/res/loginapp_wot.pubkey",
+        "/wot/eu/paths.xml",
+        "/wot/paths.xml",
+        "/paths.xml",
+        "/wot/eu/version.xml",
+        "/version.xml",
+        "/wot/eu/files/client/",
+        "/wot/eu/files/",
+        "/wot/eu/",
+        "/wot/",
+        "/",
+    ]
+    
+    results = []
+    for domain in domains:
+        for path in paths:
+            url = domain + path
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Wargaming Game Center"})
+                resp = urllib.request.urlopen(req, timeout=10, context=ctx)
+                content = resp.read()
+                text = content.decode("utf-8", errors="replace")
+                results.append({
+                    "url": url,
+                    "status": resp.status,
+                    "size": len(content),
+                    "is_key": "MIIBIj" in text,
+                    "is_dir": "Index of" in text or "<li><a" in text[:200],
+                    "preview": text[:300] if len(text) < 300 else text[:300]
+                })
+                if "MIIBIj" in text:
+                    return jsonify({"ok": True, "found": True, "url": url, "content": text[:1000]})
+            except urllib.error.HTTPError as e:
+                body = e.read()
+                if e.code != 404:
+                    results.append({"url": url, "status": e.code, "body_preview": body.decode("utf-8", errors="replace")[:200]})
+            except Exception as e:
+                err = str(e)
+                if "Name or service not known" not in err and "timed out" not in err:
+                    results.append({"url": url, "error": err[:100]})
+    
+    return jsonify({"ok": True, "found": False, "results": results})
 
 
 if __name__ == "__main__":
