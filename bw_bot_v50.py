@@ -113,30 +113,17 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # C++ BigWorld server format (NOT wg-toolkit-rs):
-    # - NO flag byte (server RSA-decrypts ALL remaining bytes after protocol)
-    # - NO context field (C++ LogOnParams doesn't have it)
-    # - packed_u24 strings (C++ BinaryStream::operator>> uses readPackedInt)
-    #
-    # Format: [protocol(4B)] [RSA_OAEP_SHA1(LogOnParams)] = 260B
-    # LogOnParams: [flags(1B)] [pu24(user)] [pu24(pwd)] [pu24(bfkey)] [u32(nonce)]
+    # UNENCRYPTED login — bypasses RSA key entirely!
+    # C++ server: try RSA decrypt -> fail -> fallback to unencrypted (allowed)
+    # LogOnParams: flags(1B) + packed_u24(user) + packed_u24(pwd) + packed_u24(bfkey) + u32(nonce)
+    # NO flag byte, NO context, NO RSA
+    logon = struct.pack("<B", 0)
+    logon += pack_str_u24("guest")
+    logon += pack_str_u24("")
+    logon += pack_str_u24(bf_key)
+    logon += struct.pack("<I", login_nonce)
+    return struct.pack("<I", protocol) + logon
 
-    logon = struct.pack("<B", 0)          # flags (0x00 = no digest)
-    logon += pack_str_u24("guest")        # username (packed_u24)
-    logon += pack_str_u24("")             # password (packed_u24)
-    logon += pack_str_u24(bf_key)         # blowfish key (packed_u24, 56 bytes)
-    # NO context field — C++ BigWorld doesn't have it
-    logon += struct.pack("<I", login_nonce)  # nonce (u32)
-
-    key = RSA.importKey(rsa_key_pem)
-    cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
-    encrypted = cipher.encrypt(logon)
-
-    # NO flag byte, NO prefix — server reads all 256 remaining bytes as RSA
-    return struct.pack("<I", protocol) + encrypted
-
-# CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
-# Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
 def build_cr_body(duration, key_str, solution):
     body = struct.pack("<f", duration)  # data << duration (f32)
     body += pack_str_u24(key_str)  # data << key (packed_u24 — SAME as challenge!)
@@ -309,7 +296,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v67: C++ confirmed format + 120s timeout + re-send every 10s")
+    print(f"  v68: UNENCRYPTED login — bypass RSA key, server allows unencrypted")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -380,53 +367,24 @@ def main():
     pkt = build_packet(content, first_req=len(cr_elem))
     print(f"    CR body={len(cr_body)}B (duration=4B + key_packed_u24={1+len(key_str)}B + 42×4B = {4+1+len(key_str)+168}B)")
     print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B (body={len(login_body)}B), Packet={len(pkt)}B")
-
-    # Send CR+Login through Base44 backend proxy (bypasses WARP!)
-    import urllib.request, json as jmod
-    proxy_url = "https://app.base44.com/api/v1/apps/6a69334d48873382d95a37de/backend-functions/udpProxy"
-    proxy_body = jmod.dumps({"packet_hex": pkt.hex(), "server_host": SERVER_HOST, "server_port": SERVER_PORT, "timeout_ms": 60000}).encode()
-
-    print(f"    [PROXY] Sending {len(pkt)}B via Base44 backend proxy...")
+    # Direct send — UNENCRYPTED login bypasses RSA key issue
     got_response = False
-    try:
-        proxy_req = urllib.request.Request(proxy_url, data=proxy_body, method="POST", headers={"Content-Type": "application/json"})
-        proxy_resp = urllib.request.urlopen(proxy_req, timeout=90)
-        rj = jmod.loads(proxy_resp.read())
-        if rj.get("responses"):
-            resp = rj["responses"][0]
-            data = bytes.fromhex(resp["hex"])
-            print(f"    [PROXY] Got response! {len(data)}B from {resp['from']}")
-            print(f"    [PROXY] Hex: {resp['hex'][:200]}")
-            got_response = True
-        else:
-            print(f"    [PROXY] No response: {rj}")
-    except Exception as e:
-        print(f"    [PROXY] Error: {e}")
+    data = None
+    sock.settimeout(120)
 
-    if not got_response:
-        # Diagnostic: PING server to check if alive
-        print("\n    [DIAG] Pinging server to check if still alive...")
+    print(f"    [SEND] Packet={len(pkt)}B (CR={len(cr_elem)}B + Login={len(login_elem)}B, body={len(login_body)}B)")
+    print(f"    [SEND] Login is UNENCRYPTED (no RSA) — server allows unencrypted fallback")
+
+    for sa in range(5):
+        sock.sendto(pkt, SERVER)
         try:
-            sock.settimeout(10)
-            sock.sendto(build_ping(rid+10), SERVER)
-            pdata, _ = sock.recvfrom(4096)
-            print(f"    [DIAG] PING OK! Server alive ({len(pdata)}B)")
-            print(f"    [DIAG] Response: {pdata.hex()[:120]}")
-            # Try reading it as a login response
-            result = parse_reply(pdata)
-            if result:
-                status, _, extra = result
-                print(f"    [DIAG] Parsed: status=0x{status:02X}, extra={len(extra)}B")
-                try: print(f"    [DIAG] Message: {extra.decode('utf-8', errors='replace')[:200]}")
-                except: pass
-            else:
-                print(f"    [DIAG] Not a reply element. Raw: {pdata.hex()[:200]}")
+            data, addr = sock.recvfrom(4096)
+            got_response = True
+            print(f"    [RECV] Got {len(data)}B from {addr} after attempt {sa+1}")
+            break
         except socket.timeout:
-            print("    [DIAG] PING timed out — server dropped our connection")
-        except Exception as e:
-            print(f"    [DIAG] PING error: {e}")
-        sock.close()
-        return
+            if sa < 4:
+                print(f"    [RECV] Timeout, retry {sa+2}/5...")
 
     if got_response:
         result = parse_reply(data)
@@ -434,20 +392,39 @@ def main():
             status, _, extra = result
             print(f"    Status: 0x{status:02X}")
             print(f"    Raw extra ({len(extra)}B): {extra[:100].hex()}")
-            try: msg = extra.decode('utf-8', errors='replace')[:200]
-            except: msg = ""
-            if msg.strip(): print(f"    Message: {msg}")
-            if status == 0x01: print("    === LOGIN SUCCESS! ===")
-            elif status == 0x47: print("    -> Invalid User — CORRECT!")
-            elif status == 0x48: print("    -> Invalid Password — CORRECT!")
-            elif status == 0x55: print("    -> Failed login challenge")
-            elif status == 0x40: print("    -> destream")
-            else: print(f"    -> NEW: 0x{status:02X}")
-        else: print("    Can't parse")
+            try:
+                msg = extra.decode("utf-8", errors="replace")[:200]
+            except:
+                msg = ""
+            if msg.strip():
+                print(f"    Message: {msg}")
+            if status == 0x01:
+                print("    === LOGIN SUCCESS! ===")
+            elif status == 0x47:
+                print("    -> Invalid User")
+            elif status == 0x48:
+                print("    -> Invalid Password")
+            elif status == 0x55:
+                print("    -> Failed login challenge")
+            elif status == 0x40:
+                print("    -> destream")
+            else:
+                print(f"    -> NEW: 0x{status:02X}")
+        else:
+            print("    Can't parse response")
     else:
-        print("    All retries timed out (30s each)")
-        print("    Server may have accepted login - response could be on different format/port")
+        print("    All retries timed out (120s each)")
+        # PING to check alive
+        sock.settimeout(10)
+        sock.sendto(build_ping(rid+99), SERVER)
+        try:
+            pdata, _ = sock.recvfrom(4096)
+            print(f"    [PING] Server alive! {len(pdata)}B = {pdata.hex()[:100]}")
+        except:
+            print("    [PING] Server not responding")
+
     sock.close()
+    print("\nDone.")
     print("\nDone.")
 
 if __name__ == "__main__":
