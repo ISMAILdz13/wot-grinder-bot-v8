@@ -113,16 +113,18 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # UNENCRYPTED login — bypasses RSA key entirely!
-    # C++ server: try RSA decrypt -> fail -> fallback to unencrypted (allowed)
-    # LogOnParams: flags(1B) + packed_u24(user) + packed_u24(pwd) + packed_u24(bfkey) + u32(nonce)
-    # NO flag byte, NO context, NO RSA
-    logon = struct.pack("<B", 0)
-    logon += pack_str_u24("guest")
-    logon += pack_str_u24("")
-    logon += pack_str_u24(bf_key)
-    logon += struct.pack("<I", login_nonce)
+    # UNENCRYPTED login padded to 256 bytes — server RSA decoder needs full block
+    # Server tries RSA decrypt(256B) -> fails -> falls back to unencrypted
+    # Then reads first 69 bytes as LogOnParams, ignores rest
+    logon = struct.pack("<B", 0)          # flags (0x00 = no digest)
+    logon += pack_str_u24("guest")        # username (packed_u24)
+    logon += pack_str_u24("")             # password (packed_u24)
+    logon += pack_str_u24(bf_key)         # blowfish key (packed_u24, 56 bytes)
+    logon += struct.pack("<I", login_nonce)  # nonce (u32)
+    # Pad to 256 bytes so RSA decoder doesn't crash (needs full RSA block)
+    logon += b'\x00' * (256 - len(logon))
     return struct.pack("<I", protocol) + logon
+
 
 def build_cr_body(duration, key_str, solution):
     body = struct.pack("<f", duration)  # data << duration (f32)
@@ -296,7 +298,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v68: UNENCRYPTED login — bypass RSA key, server allows unencrypted")
+    print(f"  v69: Unencrypted login padded to 256B — prevents RSA decoder crash")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -370,12 +372,12 @@ def main():
     # Direct send — UNENCRYPTED login bypasses RSA key issue
     got_response = False
     data = None
-    sock.settimeout(120)
+    sock.settimeout(15)
 
     print(f"    [SEND] Packet={len(pkt)}B (CR={len(cr_elem)}B + Login={len(login_elem)}B, body={len(login_body)}B)")
     print(f"    [SEND] Login is UNENCRYPTED (no RSA) — server allows unencrypted fallback")
 
-    for sa in range(5):
+    for sa in range(3):
         sock.sendto(pkt, SERVER)
         try:
             data, addr = sock.recvfrom(4096)
@@ -384,7 +386,7 @@ def main():
             break
         except socket.timeout:
             if sa < 4:
-                print(f"    [RECV] Timeout, retry {sa+2}/5...")
+                print(f"    [RECV] Timeout, retry {sa+2}/3...")
 
     if got_response:
         result = parse_reply(data)
