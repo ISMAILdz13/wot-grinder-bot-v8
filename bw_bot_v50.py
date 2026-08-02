@@ -1,3 +1,4 @@
+import os
 #!/usr/bin/env python3
 """WoT Bot v50 — THE REAL FIX from BigWorld source
 
@@ -298,7 +299,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v69: Unencrypted login padded to 256B — prevents RSA decoder crash")
+    print(f"  v70: Render.com UDP proxy — bypass WARP entirely")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -375,18 +376,33 @@ def main():
     sock.settimeout(15)
 
     print(f"    [SEND] Packet={len(pkt)}B (CR={len(cr_elem)}B + Login={len(login_elem)}B, body={len(login_body)}B)")
-    print(f"    [SEND] Login is UNENCRYPTED (no RSA) — server allows unencrypted fallback")
+    # Send CR+Login through Render.com UDP proxy (bypasses WARP!)
+    import urllib.request, json as jmod
+    PROXY_URL = os.environ.get("RENDER_URL", "https://wot-udp-proxy.onrender.com")
+    proxy_body = jmod.dumps({
+        "packet": pkt.hex(),
+        "host": SERVER[0],
+        "port": SERVER[1],
+        "timeout": 60
+    }).encode()
 
-    for sa in range(3):
-        sock.sendto(pkt, SERVER)
-        try:
-            data, addr = sock.recvfrom(4096)
+    print(f"    [PROXY] Sending {len(pkt)}B via {PROXY_URL}...")
+    got_response = False
+    try:
+        proxy_req = urllib.request.Request(PROXY_URL + "/send", data=proxy_body, method="POST",
+            headers={"Content-Type": "application/json"})
+        proxy_resp = urllib.request.urlopen(proxy_req, timeout=90)
+        rj = jmod.loads(proxy_resp.read())
+        if rj.get("ok") and rj.get("responses"):
+            resp = rj["responses"][0]
+            data = bytes.fromhex(resp["hex"])
+            print(f"    [PROXY] Got response! {len(data)}B from {resp['from']}")
+            print(f"    [PROXY] Hex: {resp['hex'][:200]}")
             got_response = True
-            print(f"    [RECV] Got {len(data)}B from {addr} after attempt {sa+1}")
-            break
-        except socket.timeout:
-            if sa < 4:
-                print(f"    [RECV] Timeout, retry {sa+2}/3...")
+        else:
+            print(f"    [PROXY] No response: {rj.get('error', rj)}")
+    except Exception as e:
+        print(f"    [PROXY] Error: {e}")
 
     if got_response:
         result = parse_reply(data)
@@ -394,38 +410,42 @@ def main():
             status, _, extra = result
             print(f"    Status: 0x{status:02X}")
             print(f"    Raw extra ({len(extra)}B): {extra[:100].hex()}")
-            try:
-                msg = extra.decode("utf-8", errors="replace")[:200]
-            except:
-                msg = ""
-            if msg.strip():
-                print(f"    Message: {msg}")
-            if status == 0x01:
-                print("    === LOGIN SUCCESS! ===")
-            elif status == 0x47:
-                print("    -> Invalid User")
-            elif status == 0x48:
-                print("    -> Invalid Password")
-            elif status == 0x55:
-                print("    -> Failed login challenge")
-            elif status == 0x40:
-                print("    -> destream")
-            else:
-                print(f"    -> NEW: 0x{status:02X}")
+            try: msg = extra.decode("utf-8", errors="replace")[:200]
+            except: msg = ""
+            if msg.strip(): print(f"    Message: {msg}")
+            if status == 0x01: print("    === LOGIN SUCCESS! ===")
+            elif status == 0x47: print("    -> Invalid User")
+            elif status == 0x48: print("    -> Invalid Password")
+            elif status == 0x55: print("    -> Failed login challenge")
+            elif status == 0x40: print("    -> destream")
+            else: print(f"    -> NEW: 0x{status:02X}")
         else:
             print("    Can't parse response")
     else:
-        print("    All retries timed out (120s each)")
-        # PING to check alive
+        # Fallback: try direct UDP too
+        print("    [DIRECT] Trying direct UDP as fallback...")
+        sock.settimeout(15)
+        sock.sendto(pkt, SERVER)
+        try:
+            data, addr = sock.recvfrom(4096)
+            print(f"    [DIRECT] Got {len(data)}B from {addr}")
+            result = parse_reply(data)
+            if result:
+                status, _, extra = result
+                print(f"    Status: 0x{status:02X}")
+        except socket.timeout:
+            print("    [DIRECT] Timeout")
+        # PING check
         sock.settimeout(10)
         sock.sendto(build_ping(rid+99), SERVER)
         try:
             pdata, _ = sock.recvfrom(4096)
-            print(f"    [PING] Server alive! {len(pdata)}B = {pdata.hex()[:100]}")
+            print(f"    [PING] Server alive! {len(pdata)}B")
         except:
-            print("    [PING] Server not responding")
+            print("    [PING] No response")
 
     sock.close()
+    print("\nDone.")
     print("\nDone.")
     print("\nDone.")
 
