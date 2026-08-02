@@ -113,27 +113,34 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # LogOnParams — SAME format as first unencrypted login (packed_u24 + context)
-    # v44 CONFIRMED: u32 strings + NO context = server parses OK (got 0x55)
-    # C++ BigWorld BinaryStream << string = u32(len) + data, NO context field
-    def s32(s):
-        if isinstance(s, str): s = s.encode()
-        return struct.pack("<I", len(s)) + s
-    logon = struct.pack("<B", 0)   # flags
-    logon += s32("guest")          # username
-    logon += s32("")               # password
-    logon += s32(bf_key)           # encryption key (56 bytes)
-    logon += struct.pack("<I", login_nonce)  # nonce (NO context!)
+    # FROM wg-toolkit-rs source code (element.rs):
+    # write.write_u32(self.protocol)?;      // 4B protocol
+    # write.write_bool(true)?;               // 1B flag = 0x01 (encrypted)
+    # write_login_request(&mut RsaWriter::new(write, config), self)
+    #
+    # LogOnParams (inside RSA, from write_login_request):
+    # write.write_u8(flags)?;                 // 1B flags (0x00 = no digest)
+    # write.write_string_variable(username)?; // packed_u24 string
+    # write.write_string_variable(password)?; // packed_u24 string
+    # write.write_blob_variable(blowfish_key)?; // packed_u24 blob
+    # write.write_string_variable(context)?;  // packed_u24 string (REQUIRED!)
+    # write.write_u32(nonce)?;                 // 4B nonce
+    
+    logon = struct.pack("<B", 0)          # flags (0x00 = no digest)
+    logon += pack_str_u24("guest")        # username
+    logon += pack_str_u24("")             # password
+    logon += pack_str_u24(bf_key)         # blowfish key (56 bytes)
+    logon += pack_str_u24("")             # context
+    logon += struct.pack("<I", login_nonce)  # nonce
 
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
     encrypted = cipher.encrypt(logon)
 
-    # v44 CONFIRMED: C++ BigWorld has NO flag byte, NO packed_u24 prefix
-    # Server reads ALL remaining bytes after protocol as RSA data (256B)
-    # If we add flag/prefix, body > 256B → RSA decrypt fails → silent drop
-    # Format: [protocol(4B)] [RSA_OAEP_SHA1_data(256B)] = 260B total
-    return struct.pack("<I", protocol) + encrypted
+    # Format: [protocol(4B)] [flag=0x01(1B)] [RSA_OAEP_SHA1(256B)]
+    # The RsaWriter writes RSA-encrypted data directly (NO pack_u24 prefix)
+    # Server reads: protocol(4B) → flag(1B) → if true, RsaReader decrypts 256B
+    return struct.pack("<I", protocol) + struct.pack("<B", 1) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -307,7 +314,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: v44 format — u32 strings + NO context (C++ BigWorld BinaryStream)")
+    print(f"  FIX: wg-toolkit-rs format — flag(0x01) + packed_u24 + context (from source)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
