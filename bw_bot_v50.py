@@ -141,17 +141,20 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # UNENCRYPTED login padded to 256 bytes — server RSA decoder needs full block
-    # Server tries RSA decrypt(256B) -> fails -> falls back to unencrypted
-    # Then reads first 69 bytes as LogOnParams, ignores rest
-    logon = struct.pack("<B", 0)          # flags (0x00 = no digest)
-    logon += pack_str_u24("guest")        # username (packed_u24)
-    logon += pack_str_u24("")             # password (packed_u24)
-    logon += pack_str_u24(bf_key)         # blowfish key (packed_u24, 56 bytes)
-    logon += struct.pack("<I", login_nonce)  # nonce (u32)
-    # Pad to 256 bytes so RSA decoder doesn't crash (needs full RSA block)
-    logon += b'\x00' * (256 - len(logon))
-    return struct.pack("<I", protocol) + logon
+    # RSA-encrypted login — C++ BigWorld format (NO flag byte)
+    # Server requires RSA encryption (unencrypted not allowed)
+    # LogOnParams: flags(1B) + pu24(user) + pu24(pwd) + pu24(bfkey) + u32(nonce)
+    # NO context field (C++ BigWorld doesn't have it)
+    logon = struct.pack("<B", 0)
+    logon += pack_str_u24("guest")
+    logon += pack_str_u24("")
+    logon += pack_str_u24(bf_key)
+    logon += struct.pack("<I", login_nonce)
+    # RSA OAEP-SHA1 encrypt
+    key = RSA.importKey(rsa_key_pem)
+    cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
+    encrypted = cipher.encrypt(logon)
+    return struct.pack("<I", protocol) + encrypted
 
 
 def build_cr_body(duration, key_str, solution):
@@ -326,7 +329,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v72: ALL packets via proxy same socket — server matches challenge")
+    print(f"  v73: RSA-encrypted login via proxy — unencrypted rejected, must use RSA")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
