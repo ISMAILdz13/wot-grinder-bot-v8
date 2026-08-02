@@ -301,13 +301,15 @@ YB60u6lK9cvDEeuhPH95TPpzLNUFgmQIu9FU8PkcKA53bj0LWZR7v86Oco6vFg6V
 sQIDAQAB
 -----END PUBLIC KEY-----"""
 
-SERVER = ("login.p1.worldoftanks.eu", 20016)
+SERVER_HOST = "login.p1.worldoftanks.eu"
+SERVER_PORT = 20016
+SERVER = (SERVER_HOST, SERVER_PORT)
 PROTOCOL = 285278213
 
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: C++ format — no flag + packed_u24 + NO context (untested combo)")
+    print(f"  v66: UDP proxy bypass WARP - C++ confirmed format (no flag, pu24, no context)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -379,15 +381,27 @@ def main():
     print(f"    CR body={len(cr_body)}B (duration=4B + key_packed_u24={1+len(key_str)}B + 42×4B = {4+1+len(key_str)+168}B)")
     print(f"    CR={len(cr_elem)}B, Login={len(login_elem)}B (body={len(login_body)}B), Packet={len(pkt)}B")
 
+    # Send CR+Login through Base44 backend proxy (bypasses WARP!)
+    import urllib.request, json as jmod
+    proxy_url = "https://app.base44.com/api/v1/apps/6a69334d48873382d95a37de/backend-functions/udpProxy"
+    proxy_body = jmod.dumps({"packet_hex": pkt.hex(), "server_host": SERVER_HOST, "server_port": SERVER_PORT, "timeout_ms": 60000}).encode()
+
+    print(f"    [PROXY] Sending {len(pkt)}B via Base44 backend proxy...")
     got_response = False
-    for sa in range(3):
-        sock.sendto(pkt, SERVER)
-        try:
-            data, _ = sock.recvfrom(4096)
+    try:
+        proxy_req = urllib.request.Request(proxy_url, data=proxy_body, method="POST", headers={"Content-Type": "application/json"})
+        proxy_resp = urllib.request.urlopen(proxy_req, timeout=90)
+        rj = jmod.loads(proxy_resp.read())
+        if rj.get("responses"):
+            resp = rj["responses"][0]
+            data = bytes.fromhex(resp["hex"])
+            print(f"    [PROXY] Got response! {len(data)}B from {resp['from']}")
+            print(f"    [PROXY] Hex: {resp['hex'][:200]}")
             got_response = True
-            break
-        except socket.timeout:
-            if sa < 2: print(f"    Timeout, retry {sa+2}/3...")
+        else:
+            print(f"    [PROXY] No response: {rj}")
+    except Exception as e:
+        print(f"    [PROXY] Error: {e}")
 
     if not got_response:
         # Diagnostic: PING server to check if alive
