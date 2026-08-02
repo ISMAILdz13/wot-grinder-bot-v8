@@ -125,10 +125,11 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
     encrypted = cipher.encrypt(logon)
 
-    # Format: [protocol(4B)] [flag=0x01] [packed_u24(RSA_len)] [RSA_data(256B)]
-    # Flag 0x01 = encrypted (server reads this byte: 0=unencrypted, nonzero=encrypted)
-    # packed_u24 = variable-length blob size (matches wg-toolkit-rs write_blob_variable)
-    return struct.pack("<I", protocol) + struct.pack("<B", 1) + pack_u24(len(encrypted)) + encrypted
+    # v44 CONFIRMED: C++ BigWorld has NO flag byte, NO packed_u24 prefix
+    # Server reads ALL remaining bytes after protocol as RSA data (256B)
+    # If we add flag/prefix, body > 256B → RSA decrypt fails → silent drop
+    # Format: [protocol(4B)] [RSA_OAEP_SHA1_data(256B)] = 260B total
+    return struct.pack("<I", protocol) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -302,7 +303,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: Encrypted login = flag(0x01) + packed_u24 RSA blob + packed_u24 LogOnParams")
+    print(f"  FIX: Encrypted login = protocol(4B) + RSA(256B) — NO flag, NO prefix (v44 confirmed)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
