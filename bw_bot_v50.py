@@ -309,7 +309,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v66: UDP proxy bypass WARP - C++ confirmed format (no flag, pu24, no context)")
+    print(f"  v67: C++ confirmed format + 120s timeout + re-send every 10s")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
