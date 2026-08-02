@@ -113,34 +113,27 @@ def build_logon_u32(bf_key):
     return logon
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
-    # FROM wg-toolkit-rs source code (element.rs):
-    # write.write_u32(self.protocol)?;      // 4B protocol
-    # write.write_bool(true)?;               // 1B flag = 0x01 (encrypted)
-    # write_login_request(&mut RsaWriter::new(write, config), self)
+    # C++ BigWorld server format (NOT wg-toolkit-rs):
+    # - NO flag byte (server RSA-decrypts ALL remaining bytes after protocol)
+    # - NO context field (C++ LogOnParams doesn't have it)
+    # - packed_u24 strings (C++ BinaryStream::operator>> uses readPackedInt)
     #
-    # LogOnParams (inside RSA, from write_login_request):
-    # write.write_u8(flags)?;                 // 1B flags (0x00 = no digest)
-    # write.write_string_variable(username)?; // packed_u24 string
-    # write.write_string_variable(password)?; // packed_u24 string
-    # write.write_blob_variable(blowfish_key)?; // packed_u24 blob
-    # write.write_string_variable(context)?;  // packed_u24 string (REQUIRED!)
-    # write.write_u32(nonce)?;                 // 4B nonce
-    
+    # Format: [protocol(4B)] [RSA_OAEP_SHA1(LogOnParams)] = 260B
+    # LogOnParams: [flags(1B)] [pu24(user)] [pu24(pwd)] [pu24(bfkey)] [u32(nonce)]
+
     logon = struct.pack("<B", 0)          # flags (0x00 = no digest)
-    logon += pack_str_u24("guest")        # username
-    logon += pack_str_u24("")             # password
-    logon += pack_str_u24(bf_key)         # blowfish key (56 bytes)
-    logon += pack_str_u24("")             # context
-    logon += struct.pack("<I", login_nonce)  # nonce
+    logon += pack_str_u24("guest")        # username (packed_u24)
+    logon += pack_str_u24("")             # password (packed_u24)
+    logon += pack_str_u24(bf_key)         # blowfish key (packed_u24, 56 bytes)
+    # NO context field — C++ BigWorld doesn't have it
+    logon += struct.pack("<I", login_nonce)  # nonce (u32)
 
     key = RSA.importKey(rsa_key_pem)
     cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
     encrypted = cipher.encrypt(logon)
 
-    # Format: [protocol(4B)] [flag=0x01(1B)] [RSA_OAEP_SHA1(256B)]
-    # The RsaWriter writes RSA-encrypted data directly (NO pack_u24 prefix)
-    # Server reads: protocol(4B) → flag(1B) → if true, RsaReader decrypts 256B
-    return struct.pack("<I", protocol) + struct.pack("<B", 1) + encrypted
+    # NO flag byte, NO prefix — server reads all 256 remaining bytes as RSA
+    return struct.pack("<I", protocol) + encrypted
 
 # CR body: NO DURATION! Just key (u32 string) + 42×nonce (u32 each)
 # Matches BigWorld: data << key; for(i) data << nonce_t(solution[i]);
@@ -314,7 +307,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  FIX: wg-toolkit-rs format — flag(0x01) + packed_u24 + context (from source)")
+    print(f"  FIX: C++ format — no flag + packed_u24 + NO context (untested combo)")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
