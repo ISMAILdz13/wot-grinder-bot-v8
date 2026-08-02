@@ -22,14 +22,14 @@ from Crypto.Cipher import PKCS1_OAEP
 from Crypto.Hash import SHA1
 
 # ===== FAST C CUCKOO SOLVER (10x faster than pure Python) =====
-import ctypes, subprocess, os as _os, tempfile as _tf
+import ctypes, subprocess, os as os, tempfile as _tf
 
 _fast_lib = None
 def _try_compile_fast():
     global _fast_lib
-    src = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'cuckoo_fast.c')
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cuckoo_fast.c')
     lib = src.replace('.c', '.so')
-    if not _os.path.exists(lib):
+    if not os.path.exists(lib):
         ret = subprocess.call(['gcc','-O3','-shared','-fPIC','-o',lib,src],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if ret != 0: return False
@@ -190,12 +190,12 @@ def _load_c_solver():
     if _cuckoo_lib is not None: return _cuckoo_lib
     src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cuckoo_fast.c')
     lib = src.replace('.c', '.so')
-    if not _os2.exists(lib):
+    if not os.path.exists(lib):
         for cc in ['gcc', 'clang', 'cc']:
             ret = subprocess.call([cc, '-O3', '-shared', '-fPIC', '-o', lib, src],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if ret == 0: break
-    if _os2.exists(lib):
+    if os.path.exists(lib):
         try:
             _cuckoo_lib = ctypes.CDLL(lib)
             _cuckoo_lib.cuckoo_solve.argtypes = [ctypes.c_char_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint32)]
