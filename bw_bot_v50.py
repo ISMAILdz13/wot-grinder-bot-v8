@@ -306,7 +306,7 @@ def main():
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(30)
+    sock.settimeout(45)
     rid = 1
 
     print("[0] PING...", end=" ", flush=True)
@@ -354,7 +354,7 @@ def main():
         print("    No solution, reopening socket...")
         sock.close()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(30)
+        sock.settimeout(45)
         sock.sendto(build_ping(rid), SERVER)
         try: sock.recvfrom(4096); rid += 1
         except: pass
@@ -383,6 +383,31 @@ def main():
             break
         except socket.timeout:
             if sa < 2: print(f"    Timeout, retry {sa+2}/3...")
+
+    if not got_response:
+        # Diagnostic: PING server to check if alive
+        print("\n    [DIAG] Pinging server to check if still alive...")
+        try:
+            sock.settimeout(10)
+            sock.sendto(build_ping(rid+10), SERVER)
+            pdata, _ = sock.recvfrom(4096)
+            print(f"    [DIAG] PING OK! Server alive ({len(pdata)}B)")
+            print(f"    [DIAG] Response: {pdata.hex()[:120]}")
+            # Try reading it as a login response
+            result = parse_reply(pdata)
+            if result:
+                status, _, extra = result
+                print(f"    [DIAG] Parsed: status=0x{status:02X}, extra={len(extra)}B")
+                try: print(f"    [DIAG] Message: {extra.decode('utf-8', errors='replace')[:200]}")
+                except: pass
+            else:
+                print(f"    [DIAG] Not a reply element. Raw: {pdata.hex()[:200]}")
+        except socket.timeout:
+            print("    [DIAG] PING timed out — server dropped our connection")
+        except Exception as e:
+            print(f"    [DIAG] PING error: {e}")
+        sock.close()
+        return
 
     if got_response:
         result = parse_reply(data)
