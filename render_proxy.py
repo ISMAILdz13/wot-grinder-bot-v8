@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v9"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v10"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -159,15 +159,34 @@ def extract_installer():
         with tarfile.open(inno_tar, 'r:xz') as t:
             t.extractall(inno_dir)
         
-        # Find innoextract binary
+        # Find innoextract binary for correct architecture
+        import platform
+        arch = platform.machine()  # x86_64
         inno_bin = None
+        # List all binaries first
+        all_bins = []
         for root, dirs, files in os.walk(inno_dir):
             for f in files:
-                if 'innoextract' in f and os.access(os.path.join(root, f), os.X_OK):
-                    inno_bin = os.path.join(root, f)
-                elif f == 'innoextract':
-                    inno_bin = os.path.join(root, f)
-                    os.chmod(inno_bin, 0o755)
+                if f == 'innoextract':
+                    all_bins.append(os.path.join(root, f))
+        # Try to find x86_64 binary
+        for b in all_bins:
+            os.chmod(b, 0o755)
+            # Check if it's the right arch by looking at directory name
+            if arch in b or 'x86_64' in b or 'x86-64' in b or 'amd64' in b:
+                inno_bin = b
+                break
+        # If no match by name, try running each one
+        if not inno_bin:
+            for b in all_bins:
+                os.chmod(b, 0o755)
+                try:
+                    r_test = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=3)
+                    if r_test.returncode == 0:
+                        inno_bin = b
+                        break
+                except:
+                    pass
         if not inno_bin:
             return jsonify({"ok": False, "error": "innoextract binary not found"})
         
