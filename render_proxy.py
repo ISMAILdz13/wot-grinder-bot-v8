@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v12"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v13"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -371,26 +371,45 @@ def extract_wgpkg():
                     except:
                         pass
                 
-                # Search ALL files for RSA key
+                # Search ALL files for RSA key and URLs
                 try:
                     with open(fpath, 'rb') as pf:
                         raw = pf.read()
                     if b'MIIBIj' in raw:
                         idx = raw.find(b'MIIBIj')
                         found_files.append({"name": rel + " [RSA KEY!]", "content": raw[idx:idx+500].decode('utf-8', errors='replace')})
+                    # Search for wargaming URLs (skip huge files > 50MB)
+                    if len(raw) < 50*1024*1024:
+                        import re
+                        urls = re.findall(rb'https?://[a-z0-9.-]*wargaming[a-z0-9./_?&=-]+', raw, re.IGNORECASE)
+                        if urls:
+                            unique_urls = list(set(u.decode('utf-8', errors='replace') for u in urls))[:10]
+                            text_files[rel + " [URLs]"] = "\n".join(unique_urls)
+                        # Also search for "loginapp" and "pubkey" and "dl-wot" strings
+                        for pattern in [b'loginapp', b'pubkey', b'dl-wot', b'content.wargaming', b'meta_game', b'patching']:
+                            if pattern in raw:
+                                idx = raw.find(pattern)
+                                context = raw[max(0,idx-30):idx+100].decode('utf-8', errors='replace')
+                                text_files[rel + f" [{pattern.decode()}]"] = context
                 except:
                     pass
         
-        if found_files:
-            return jsonify({"ok": True, "found": True, "found_files": found_files, "text_files": text_files, "wgpkg_size": wgpkg_size})
+        # Always return file list
+        all_extracted = []
+        for root, dirs, files in os.walk(extract_dir):
+            for f in files:
+                rel = os.path.relpath(os.path.join(root, f), extract_dir)
+                all_extracted.append(rel)
         
         return jsonify({
-            "ok": True, "found": False,
+            "ok": True, "found": len(found_files) > 0,
+            "found_files": found_files,
             "wgpkg_size": wgpkg_size,
             "extract_returncode": r_extract.returncode,
             "extract_stderr": r_extract.stderr[:500],
             "interesting_in_list": found_in_list[:30],
-            "file_list_sample": file_list[-2000:],
+            "file_list": all_extracted[:100],
+            "total_extracted": len(all_extracted),
             "text_files": text_files
         })
     except Exception as e:
