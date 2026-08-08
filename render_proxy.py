@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v4"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v5"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -130,6 +130,114 @@ def cdn_fetch():
                 results.append({"url": url, "error": err[:100]})
     
     return jsonify({"ok": True, "found": False, "results": results})
+
+
+@app.route("/extract", methods=["POST"])
+def extract_installer():
+    """Download WGC installer and extract loginapp_wot.pubkey."""
+    import subprocess, os, tempfile, shutil
+    
+    url = "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.03.00.2798_eu/world_of_tanks_install_eu.exe"
+    tmpdir = tempfile.mkdtemp()
+    installer_path = os.path.join(tmpdir, "installer.exe")
+    extract_dir = os.path.join(tmpdir, "extracted")
+    
+    try:
+        # Download installer
+        import urllib.request, ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(url, headers={"User-Agent": "Wargaming Game Center"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(installer_path, 'wb') as f:
+            f.write(resp.read())
+        installer_size = os.path.getsize(installer_path)
+        
+        # Try to install 7z
+        try:
+            subprocess.run(["apt-get", "update", "-qq"], timeout=30, capture_output=True)
+            subprocess.run(["apt-get", "install", "-y", "-qq", "p7zip-full"], timeout=60, capture_output=True)
+        except:
+            pass
+        
+        # Try to install innoextract
+        try:
+            subprocess.run(["apt-get", "install", "-y", "-qq", "innoextract"], timeout=60, capture_output=True)
+        except:
+            pass
+        
+        results = {"installer_size": installer_size, "tools": {}}
+        
+        # Check available tools
+        for tool in ["7z", "7za", "innoextract", "unzip"]:
+            result = subprocess.run(["which", tool], capture_output=True, text=True)
+            results["tools"][tool] = result.stdout.strip() if result.returncode == 0 else None
+        
+        # Try 7z extraction
+        if results["tools"].get("7z") or results["tools"].get("7za"):
+            tool = results["tools"].get("7z") or results["tools"].get("7za")
+            os.makedirs(extract_dir, exist_ok=True)
+            r = subprocess.run([tool, "x", f"-o{extract_dir}", installer_path, "-y"], 
+                             timeout=120, capture_output=True, text=True)
+            results["7z_output"] = r.stdout[:500] + r.stderr[:500]
+            
+            # Search for loginapp_wot.pubkey
+            for root, dirs, files in os.walk(extract_dir):
+                for f in files:
+                    if "loginapp" in f.lower() or "pubkey" in f.lower() or f.endswith(".pubkey"):
+                        fpath = os.path.join(root, f)
+                        with open(fpath, 'r', errors='replace') as pf:
+                            content = pf.read()[:500]
+                        results["found_file"] = fpath
+                        results["content"] = content
+                        return jsonify({"ok": True, "found": True, **results})
+            
+            # List extracted files
+            all_files = []
+            for root, dirs, files in os.walk(extract_dir):
+                for f in files:
+                    all_files.append(os.path.relpath(os.path.join(root, f), extract_dir))
+            results["extracted_files"] = all_files[:50]
+            results["total_files"] = len(all_files)
+        
+        # Try innoextract
+        elif results["tools"].get("innoextract"):
+            os.makedirs(extract_dir, exist_ok=True)
+            r = subprocess.run(["innoextract", "-d", extract_dir, installer_path],
+                             timeout=120, capture_output=True, text=True)
+            results["innoextract_output"] = r.stdout[:500] + r.stderr[:500]
+            
+            for root, dirs, files in os.walk(extract_dir):
+                for f in files:
+                    if "loginapp" in f.lower() or "pubkey" in f.lower():
+                        fpath = os.path.join(root, f)
+                        with open(fpath, 'r', errors='replace') as pf:
+                            content = pf.read()[:500]
+                        return jsonify({"ok": True, "found": True, "file": fpath, "content": content})
+            
+            all_files = []
+            for root, dirs, files in os.walk(extract_dir):
+                for f in files:
+                    all_files.append(os.path.relpath(os.path.join(root, f), extract_dir))
+            results["extracted_files"] = all_files[:50]
+            results["total_files"] = len(all_files)
+        
+        else:
+            results["error"] = "No extraction tools available"
+            # Try searching for strings in installer
+            with open(installer_path, 'rb') as f:
+                data = f.read()
+            # Search for any URL patterns
+            import re
+            urls = re.findall(rb'https?://[a-z0-9.-]+wargaming[a-z0-9./-]+', data, re.IGNORECASE)
+            results["urls_found"] = [u.decode('utf-8', errors='replace') for u in urls[:20]]
+        
+        return jsonify({"ok": True, "found": False, **results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
