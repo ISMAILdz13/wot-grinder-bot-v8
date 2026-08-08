@@ -2,7 +2,7 @@ services:
   - type: web
     name: wot-udp-proxy
     env: python
-    buildCommand: pip install flask gunicorn
+    buildCommand: pip install flask gunicorn pycryptodome
     startCommand: gunicorn render_proxy:app --timeout 120
     plan: free
     healthCheckPath: /health
