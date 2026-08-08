@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v14"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v15"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -504,6 +504,85 @@ def search_urls():
             }
         
         return jsonify({"ok": True, "results": results})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route("/all_urls", methods=["POST"])
+def all_urls():
+    """Extract game_center.dll from WGC core and return ALL URLs found."""
+    import subprocess, os, tempfile, shutil, urllib.request, ssl, tarfile, re
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    tmpdir = tempfile.mkdtemp()
+    
+    try:
+        # Download 7z
+        sevenzip_url = "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-linux-x64.tar.xz"
+        sevenzip_tar = os.path.join(tmpdir, "7z.tar.xz")
+        sevenzip_dir = os.path.join(tmpdir, "7z")
+        os.makedirs(sevenzip_dir, exist_ok=True)
+        req = urllib.request.Request(sevenzip_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(sevenzip_tar, 'wb') as f:
+            f.write(resp.read())
+        with tarfile.open(sevenzip_tar, 'r:xz') as t:
+            t.extractall(sevenzip_dir)
+        sevenzip_bin = None
+        for root, dirs, files in os.walk(sevenzip_dir):
+            for f in files:
+                if f in ('7zz', '7z', '7zzs'):
+                    sevenzip_bin = os.path.join(root, f)
+                    os.chmod(sevenzip_bin, 0o755)
+                    break
+            if sevenzip_bin: break
+        
+        # Download WGC core
+        wgpkg_url = "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.04.01.3190_eu/wgc_26.04.01.3190_win64.wgpkg"
+        wgpkg_path = os.path.join(tmpdir, "wgc.wgpkg")
+        req = urllib.request.Request(wgpkg_url, headers={"User-Agent": "Wargaming Game Center"})
+        resp = urllib.request.urlopen(req, timeout=120, context=ctx)
+        with open(wgpkg_path, 'wb') as f:
+            while True:
+                chunk = resp.read(1024*1024)
+                if not chunk: break
+                f.write(chunk)
+        
+        # Extract game_center.dll only
+        extract_dir = os.path.join(tmpdir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        subprocess.run([sevenzip_bin, "e", f"-o{extract_dir}", wgpkg_path, "dlls/game_center.dll", "-y", "-bso0", "-bse0"],
+                     timeout=60, capture_output=True)
+        
+        # Read and search
+        fpath = os.path.join(extract_dir, "game_center.dll")
+        with open(fpath, 'rb') as f:
+            raw = f.read()
+        
+        # Find ALL URLs
+        urls = re.findall(rb'https?://[a-zA-Z0-9._/?&=:#-]+', raw)
+        all_urls = sorted(set(u.decode('utf-8', errors='replace') for u in urls if len(u) > 10))
+        
+        # Also find any string containing "wot" or "loginapp" or "pubkey" or "paths.xml" or "content" or "patch" 
+        interesting_strings = set()
+        for pattern in [rb'loginapp[\w.-]*', rb'pubkey[\w.-]*', rb'paths\.xml', rb'\w*\.pubkey', 
+                       rb'content[\w./-]*\.(?:xml|json|dat|cfg)', rb'patch[\w./-]*\.(?:xml|json)',
+                       rb'meta[\w./-]*\.(?:xml|json)', rb'filelist[\w./-]*',
+                       rb'\w*\.wgpkg', rb'game_data[\w./-]*', rb'wot[\w./-]*\.(?:xml|json|dat)']:
+            matches = re.findall(pattern, raw, re.IGNORECASE)
+            for m in matches:
+                interesting_strings.add(m.decode('utf-8', errors='replace'))
+        
+        return jsonify({
+            "ok": True,
+            "file_size": len(raw),
+            "all_urls": all_urls,
+            "interesting_strings": sorted(interesting_strings)[:50]
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
     finally:
