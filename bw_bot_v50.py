@@ -1,6 +1,6 @@
 import os
 #!/usr/bin/env python3
-"""WoT Bot v50 — THE REAL FIX from BigWorld source
+"""WoT Bot v51 — OFFICIAL KEY — THE REAL FIX from BigWorld source
 
 TWO CRITICAL BUGS FOUND in BigWorld cuckoo_cycle_login_challenge_factory.cpp:
 
@@ -328,6 +328,16 @@ YB60u6lK9cvDEeuhPH95TPpzLNUFgmQIu9FU8PkcKA53bj0LWZR7v86Oco6vFg6V
 sQIDAQAB
 -----END PUBLIC KEY-----"""
 
+KEY_OFFICIAL = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2G58NsNUP1h3qQMhi+nE
+S9yNH8B2hQ7bxrwKP79AxEkEx76DDTosIVNitvpfrJ3Was6G9HbJ/+3PB0KJA86T
+/ZzHhPy5ZAdKUKoSkrjVMo0hw3XZbyfocxYJBFFXMuvTKFfZXYBE9srsbqvtRQLW
+gCOTuK7g/prSHF5zEIxPVAOVc0LpymaB6LFYP/KrEKkXFv1ffBF2oBZq0Cp1+aO2
+3tu/jgq9hzv/kT1a/gJiwsjdjkpmXB7rRsUceKC7XDLnRZ/qLG22A8+xtAINq1nW
+891IXT17BkSKNWcb9ZfLDBEQsvhM6/0bageaEZigPZzF0NHc8k32LEHotqcr2wbA
+qwIDAQAB
+-----END PUBLIC KEY-----"""
+
 KEY_WOT = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyjeVAXWfhj02sEGd8BnK
 Z2y8Twnwefea2R3QulJurdD0lmFPyczP2Z54Lju7TAMYtJ4o02MTkm2BKtmd7WOt
@@ -346,7 +356,7 @@ PROTOCOL = 285278213
 
 def main():
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
+    print(f"  WoT Bot v51 — OFFICIAL KEY — REAL FIX from BigWorld source")
     print(f"  v76: Try ALL 10 combos: BW/WOT × OAEP-SHA1/PKCS1/SHA256 × ctx/no-ctx")
     print(f"{'='*55}\n")
 
