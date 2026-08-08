@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v13"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v14"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -412,6 +412,98 @@ def extract_wgpkg():
             "total_extracted": len(all_extracted),
             "text_files": text_files
         })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route("/search_urls", methods=["POST"])
+def search_urls():
+    """Download WGC core, extract game_center.dll, search for ALL URLs."""
+    import subprocess, os, tempfile, shutil, urllib.request, ssl, tarfile, re
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    tmpdir = tempfile.mkdtemp()
+    
+    try:
+        # Download 7z binary
+        sevenzip_url = "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-linux-x64.tar.xz"
+        sevenzip_tar = os.path.join(tmpdir, "7z.tar.xz")
+        sevenzip_dir = os.path.join(tmpdir, "7z")
+        os.makedirs(sevenzip_dir, exist_ok=True)
+        req = urllib.request.Request(sevenzip_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(sevenzip_tar, 'wb') as f:
+            f.write(resp.read())
+        with tarfile.open(sevenzip_tar, 'r:xz') as t:
+            t.extractall(sevenzip_dir)
+        sevenzip_bin = None
+        for root, dirs, files in os.walk(sevenzip_dir):
+            for f in files:
+                if f in ('7zz', '7z', '7zzs'):
+                    sevenzip_bin = os.path.join(root, f)
+                    os.chmod(sevenzip_bin, 0o755)
+                    break
+            if sevenzip_bin: break
+        
+        # Download WGC core
+        wgpkg_url = "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.04.01.3190_eu/wgc_26.04.01.3190_win64.wgpkg"
+        wgpkg_path = os.path.join(tmpdir, "wgc.wgpkg")
+        req = urllib.request.Request(wgpkg_url, headers={"User-Agent": "Wargaming Game Center"})
+        resp = urllib.request.urlopen(req, timeout=120, context=ctx)
+        with open(wgpkg_path, 'wb') as f:
+            while True:
+                chunk = resp.read(1024*1024)
+                if not chunk: break
+                f.write(chunk)
+        
+        # Extract only specific files
+        extract_dir = os.path.join(tmpdir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        # Extract game_center.dll, wgc_api.exe, wgc.exe, helper_core.dll, wgc_res.dat
+        targets = ["dlls/game_center.dll", "api/wgc_api.exe", "wgc.exe", "dlls/helper_core.dll", "dlls/wgc_res.dat", "dlls/rsync.dll"]
+        for target in targets:
+            subprocess.run([sevenzip_bin, "e", f"-o{extract_dir}", wgpkg_path, target, "-y", "-bso0", "-bse0"],
+                         timeout=60, capture_output=True)
+        
+        results = {}
+        for f in os.listdir(extract_dir):
+            fpath = os.path.join(extract_dir, f)
+            with open(fpath, 'rb') as pf:
+                raw = pf.read()
+            
+            # Find ALL URLs
+            urls = re.findall(rb'https?://[a-zA-Z0-9._/?&=:#-]+', raw)
+            # Find wargaming-related strings
+            wg_strings = re.findall(rb'[a-zA-Z0-9._/-]*wargaming[a-zA-Z0-9._/-]*', raw, re.IGNORECASE)
+            # Find CDN-related strings
+            cdn_strings = re.findall(rb'[a-zA-Z0-9._/-]*(?:cdn|dl-wot|content|patch|meta_game|filelist|bootstrap|wds|wgcdn)[a-zA-Z0-9._/-]*', raw, re.IGNORECASE)
+            # Find loginapp/pubkey strings
+            login_strings = re.findall(rb'[a-zA-Z0-9._/-]*(?:loginapp|pubkey|login_key|bigworld)[a-zA-Z0-9._/-]*', raw, re.IGNORECASE)
+            # Find wdsa strings
+            wdsa_strings = re.findall(rb'[a-zA-Z0-9._/-]*wdsa[a-zA-Z0-9._/-]*', raw, re.IGNORECASE)
+            
+            # Deduplicate and clean
+            all_urls = list(set(u.decode('utf-8', errors='replace') for u in urls if len(u) > 15))
+            all_wg = list(set(s.decode('utf-8', errors='replace') for s in wg_strings if len(s) > 10))[:20]
+            all_cdn = list(set(s.decode('utf-8', errors='replace') for s in cdn_strings if len(s) > 8))[:20]
+            all_login = list(set(s.decode('utf-8', errors='replace') for s in login_strings if len(s) > 8))[:20]
+            all_wdsa = list(set(s.decode('utf-8', errors='replace') for s in wdsa_strings if len(s) > 4))[:20]
+            
+            results[f] = {
+                "size": len(raw),
+                "urls": all_urls[:50],
+                "wargaming_strings": all_wg,
+                "cdn_strings": all_cdn,
+                "login_strings": all_login,
+                "wdsa_strings": all_wdsa
+            }
+        
+        return jsonify({"ok": True, "results": results})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
     finally:
