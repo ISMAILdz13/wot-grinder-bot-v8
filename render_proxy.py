@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v8"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v9"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -133,50 +133,46 @@ def cdn_fetch():
 
 
 
+
 @app.route("/extract", methods=["POST"])
 def extract_installer():
-    """Download WGC installer, install 7z static binary, extract and find loginapp_wot.pubkey."""
-    import subprocess, os, tempfile, shutil, urllib.request, ssl
+    """Download WGC installer, extract with innoextract, find loginapp_wot.pubkey."""
+    import subprocess, os, tempfile, shutil, urllib.request, ssl, tarfile
     
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    
     tmpdir = tempfile.mkdtemp()
     
     try:
-        # Step 1: Download 7-Zip for Linux (static binary)
-        sevenzip_url = "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-linux-x64.tar.xz"
-        sevenzip_tar = os.path.join(tmpdir, "7z.tar.xz")
-        sevenzip_dir = os.path.join(tmpdir, "7z")
-        os.makedirs(sevenzip_dir, exist_ok=True)
+        # Step 1: Download innoextract
+        inno_url = "https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-linux.tar.xz"
+        inno_tar = os.path.join(tmpdir, "inno.tar.xz")
+        inno_dir = os.path.join(tmpdir, "inno")
+        os.makedirs(inno_dir, exist_ok=True)
         
-        try:
-            req = urllib.request.Request(sevenzip_url, headers={"User-Agent": "Mozilla/5.0"})
-            resp = urllib.request.urlopen(req, timeout=30, context=ctx)
-            with open(sevenzip_tar, 'wb') as f:
-                f.write(resp.read())
-            
-            # Extract tar.xz
-            import tarfile
-            with tarfile.open(sevenzip_tar, 'r:xz') as t:
-                t.extractall(sevenzip_dir)
-            
-            # Find 7z binary
-            sevenzip_bin = None
-            for root, dirs, files in os.walk(sevenzip_dir):
-                for f in files:
-                    if f == '7zz' or f == '7z' or f == '7zzs':
-                        sevenzip_bin = os.path.join(root, f)
-                        os.chmod(sevenzip_bin, 0o755)
-                        break
-                if sevenzip_bin:
-                    break
-            
-            if not sevenzip_bin:
-                return jsonify({"ok": False, "error": "7z binary not found in archive"})
-        except Exception as e:
-            return jsonify({"ok": False, "error": f"Failed to download 7z: {e}"})
+        req = urllib.request.Request(inno_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(inno_tar, 'wb') as f:
+            f.write(resp.read())
+        
+        with tarfile.open(inno_tar, 'r:xz') as t:
+            t.extractall(inno_dir)
+        
+        # Find innoextract binary
+        inno_bin = None
+        for root, dirs, files in os.walk(inno_dir):
+            for f in files:
+                if 'innoextract' in f and os.access(os.path.join(root, f), os.X_OK):
+                    inno_bin = os.path.join(root, f)
+                elif f == 'innoextract':
+                    inno_bin = os.path.join(root, f)
+                    os.chmod(inno_bin, 0o755)
+        if not inno_bin:
+            return jsonify({"ok": False, "error": "innoextract binary not found"})
+        
+        # Test it
+        r = subprocess.run([inno_bin, "--version"], capture_output=True, text=True, timeout=5)
         
         # Step 2: Download WGC installer
         url = "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.03.00.2798_eu/world_of_tanks_install_eu.exe"
@@ -188,15 +184,15 @@ def extract_installer():
         resp = urllib.request.urlopen(req, timeout=30, context=ctx)
         with open(installer_path, 'wb') as f:
             f.write(resp.read())
-        installer_size = os.path.getsize(installer_path)
         
-        # Step 3: Extract with 7z
-        result = subprocess.run(
-            [sevenzip_bin, "x", f"-o{extract_dir}", installer_path, "-y", "-bso0", "-bse0"],
-            timeout=120, capture_output=True, text=True
-        )
+        # Step 3: List files first (without extracting)
+        r_list = subprocess.run([inno_bin, "-l", installer_path], capture_output=True, text=True, timeout=30)
         
-        # Step 4: Search for loginapp_wot.pubkey
+        # Step 4: Extract all files
+        r = subprocess.run([inno_bin, "-d", extract_dir, "-s", installer_path],
+                         timeout=120, capture_output=True, text=True)
+        
+        # Step 5: Search for loginapp_wot.pubkey or any .pubkey file
         found_files = []
         all_files = []
         for root, dirs, files in os.walk(extract_dir):
@@ -206,41 +202,24 @@ def extract_installer():
                 if "loginapp" in f.lower() or "pubkey" in f.lower() or ".pubkey" in f.lower() or "login" in f.lower():
                     fpath = os.path.join(root, f)
                     try:
-                        with open(fpath, 'r', errors='replace') as pf:
-                            content = pf.read()[:1000]
-                        found_files.append({"name": rel, "content": content})
+                        with open(fpath, 'rb') as pf:
+                            raw = pf.read()
+                        content = raw.decode('utf-8', errors='replace')[:1000]
+                        found_files.append({"name": rel, "size": len(raw), "content": content})
                     except:
                         found_files.append({"name": rel, "content": "[binary]"})
         
         if found_files:
-            return jsonify({
-                "ok": True, "found": True, 
-                "found_files": found_files,
-                "installer_size": installer_size,
-                "total_files": len(all_files)
-            })
-        
-        # Read interesting files
-        file_contents = {}
-        for f in all_files:
-            if any(k in f.upper() for k in ['PACKAGEINFO', 'STRING', 'RCDATA', 'MANIFEST', 'VERSION']):
-                fpath = os.path.join(extract_dir, f)
-                try:
-                    with open(fpath, 'rb') as pf:
-                        raw = pf.read()
-                    text = raw.decode('utf-8', errors='replace')[:2000]
-                    file_contents[f] = text
-                except:
-                    file_contents[f] = "[binary]"
+            return jsonify({"ok": True, "found": True, "found_files": found_files, "total_files": len(all_files)})
         
         return jsonify({
             "ok": True, "found": False,
-            "installer_size": installer_size,
             "total_files": len(all_files),
-            "files_sample": all_files[:30],
-            "file_contents": file_contents,
-            "7z_stderr": result.stderr[:500],
-            "7z_returncode": result.returncode
+            "files_sample": all_files[:50],
+            "inno_list": r_list.stdout[:2000] if r_list.stdout else r_list.stderr[:2000],
+            "inno_extract_stdout": r.stdout[:500],
+            "inno_extract_stderr": r.stderr[:500],
+            "inno_version": r_list.stderr[:200] if not r_list.stdout else r_list.stdout[:200]
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
