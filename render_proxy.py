@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v10"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v11"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -211,34 +211,62 @@ def extract_installer():
         r = subprocess.run([inno_bin, "-d", extract_dir, "-s", installer_path],
                          timeout=120, capture_output=True, text=True)
         
-        # Step 5: Search for loginapp_wot.pubkey or any .pubkey file
+        # Step 5: Search for loginapp_wot.pubkey and read all text config files
         found_files = []
         all_files = []
+        text_file_contents = {}
         for root, dirs, files in os.walk(extract_dir):
             for f in files:
                 rel = os.path.relpath(os.path.join(root, f), extract_dir)
                 all_files.append(rel)
-                if "loginapp" in f.lower() or "pubkey" in f.lower() or ".pubkey" in f.lower() or "login" in f.lower():
-                    fpath = os.path.join(root, f)
+                fpath = os.path.join(root, f)
+                
+                # Check for key files
+                if "loginapp" in f.lower() or "pubkey" in f.lower() or ".pubkey" in f.lower():
                     try:
                         with open(fpath, 'rb') as pf:
                             raw = pf.read()
-                        content = raw.decode('utf-8', errors='replace')[:1000]
-                        found_files.append({"name": rel, "size": len(raw), "content": content})
+                        found_files.append({"name": rel, "size": len(raw), "content": raw.decode('utf-8', errors='replace')[:1000]})
                     except:
                         found_files.append({"name": rel, "content": "[binary]"})
+                
+                # Read all text config files (xml, json, ini, cfg, txt)
+                if any(f.endswith(ext) for ext in ['.xml', '.json', '.ini', '.cfg', '.txt', '.config']):
+                    try:
+                        with open(fpath, 'rb') as pf:
+                            raw = pf.read()
+                        text = raw.decode('utf-8', errors='replace')[:5000]
+                        text_file_contents[rel] = text
+                    except:
+                        pass
+                
+                # Also search ALL files for RSA key and URLs
+                try:
+                    with open(fpath, 'rb') as pf:
+                        raw = pf.read()
+                    if b'MIIBIj' in raw:
+                        idx = raw.find(b'MIIBIj')
+                        found_files.append({"name": rel, "content": raw[idx:idx+500].decode('utf-8', errors='replace')})
+                    if b'loginapp' in raw.lower():
+                        idx = raw.lower().find(b'loginapp')
+                        text_file_contents[rel + " [loginapp match]"] = raw[max(0,idx-50):idx+200].decode('utf-8', errors='replace')
+                    if b'.pubkey' in raw:
+                        idx = raw.find(b'.pubkey')
+                        text_file_contents[rel + " [.pubkey match]"] = raw[max(0,idx-50):idx+200].decode('utf-8', errors='replace')
+                except:
+                    pass
         
         if found_files:
             return jsonify({"ok": True, "found": True, "found_files": found_files, "total_files": len(all_files)})
         
         return jsonify({
-            "ok": True, "found": False,
+            "ok": True, "found": len(found_files) > 0,
+            "found_files": found_files,
             "total_files": len(all_files),
             "files_sample": all_files[:50],
+            "text_files": text_file_contents,
             "inno_list": r_list.stdout[:2000] if r_list.stdout else r_list.stderr[:2000],
-            "inno_extract_stdout": r.stdout[:500],
             "inno_extract_stderr": r.stderr[:500],
-            "inno_version": r_list.stderr[:200] if not r_list.stdout else r_list.stdout[:200]
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
