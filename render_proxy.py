@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v15"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v16"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -587,6 +587,80 @@ def all_urls():
         return jsonify({"ok": False, "error": str(e)})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route("/wine_check", methods=["POST"])
+def wine_check():
+    """Check if Wine is available and try to install it."""
+    import subprocess, os
+    
+    results = {}
+    
+    # Check if wine is already installed
+    r = subprocess.run(["which", "wine"], capture_output=True, text=True, timeout=5)
+    results["wine_path"] = r.stdout.strip() if r.returncode == 0 else None
+    
+    r2 = subprocess.run(["which", "wine64"], capture_output=True, text=True, timeout=5)
+    results["wine64_path"] = r2.stdout.strip() if r2.returncode == 0 else None
+    
+    # Check if we have root access
+    r3 = subprocess.run(["whoami"], capture_output=True, text=True, timeout=5)
+    results["user"] = r3.stdout.strip()
+    
+    # Check available disk space
+    r4 = subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=5)
+    results["disk"] = r4.stdout.strip()
+    
+    # Check if apt is available
+    r5 = subprocess.run(["which", "apt-get"], capture_output=True, text=True, timeout=5)
+    results["apt"] = r5.stdout.strip() if r5.returncode == 0 else None
+    
+    # Check if dpkg is available
+    r6 = subprocess.run(["which", "dpkg"], capture_output=True, text=True, timeout=5)
+    results["dpkg"] = r6.stdout.strip() if r6.returncode == 0 else None
+    
+    # Check architecture
+    r7 = subprocess.run(["uname", "-m"], capture_output=True, text=True, timeout=5)
+    results["arch"] = r7.stdout.strip()
+    
+    # Check if we can write to /usr/local/bin
+    try:
+        test_file = "/usr/local/bin/test_write"
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        results["can_write_usr_local"] = True
+    except:
+        results["can_write_usr_local"] = False
+    
+    # Try to install wine from WineHQ
+    install_log = []
+    try:
+        # Try apt-get install wine
+        r = subprocess.run(["apt-get", "install", "-y", "wine"], timeout=30, capture_output=True, text=True)
+        results["apt_wine"] = {"returncode": r.returncode, "stdout": r.stdout[:500], "stderr": r.stderr[:500]}
+    except Exception as e:
+        results["apt_wine_error"] = str(e)[:200]
+    
+    # Try to download wine64 static binary
+    try:
+        import urllib.request, ssl, tempfile
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        
+        # Try to find a static wine binary
+        # Actually, let's try a different approach: use exiftool or similar to extract the pubkey
+        # from the WGC installer's embedded files
+        
+        # First, let's check if we can use the 7z binary to extract .pkg files
+        # from a hypothetical CDN download
+        
+        results["approach"] = "Try using Render proxy to run 7z on WGC installer to find embedded pubkey"
+    except Exception as e:
+        results["download_error"] = str(e)[:200]
+    
+    return jsonify({"ok": True, **results})
 
 
 if __name__ == "__main__":
