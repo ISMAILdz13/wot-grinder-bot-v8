@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v7"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v8"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -220,11 +220,25 @@ def extract_installer():
                 "total_files": len(all_files)
             })
         
+        # Read interesting files
+        file_contents = {}
+        for f in all_files:
+            if any(k in f.upper() for k in ['PACKAGEINFO', 'STRING', 'RCDATA', 'MANIFEST', 'VERSION']):
+                fpath = os.path.join(extract_dir, f)
+                try:
+                    with open(fpath, 'rb') as pf:
+                        raw = pf.read()
+                    text = raw.decode('utf-8', errors='replace')[:2000]
+                    file_contents[f] = text
+                except:
+                    file_contents[f] = "[binary]"
+        
         return jsonify({
             "ok": True, "found": False,
             "installer_size": installer_size,
             "total_files": len(all_files),
             "files_sample": all_files[:30],
+            "file_contents": file_contents,
             "7z_stderr": result.stderr[:500],
             "7z_returncode": result.returncode
         })
