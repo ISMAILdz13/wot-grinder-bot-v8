@@ -20,7 +20,7 @@ Our original solver was correct, but the CR body and key were wrong!
 import socket, struct, os, hashlib, time, array, random
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP, PKCS1_v1_5
-from Crypto.Hash import SHA1
+from Crypto.Hash import SHA1, SHA256
 
 # ===== RENDER.COM UDP PROXY (bypasses WARP/ISP) =====
 PROXY_URL = "https://wot-grinder-bot.onrender.com"
