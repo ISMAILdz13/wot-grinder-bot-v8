@@ -140,8 +140,8 @@ def build_logon_u32(bf_key):
     logon += struct.pack("<I", login_nonce)  # nonce (NO context field in C++)
     return logon
 
-def build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=False):
-    """RSA-encrypted login with configurable context and padding."""
+def build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=False, use_sha256=False):
+    """RSA-encrypted login with configurable context, padding, and hash."""
     logon = struct.pack("<B", 0)
     logon += pack_str_u24("guest")
     logon += pack_str_u24("")
@@ -154,7 +154,8 @@ def build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=
         cipher = PKCS1_v1_5.new(key)
         encrypted = cipher.encrypt(logon)
     else:
-        cipher = PKCS1_OAEP.new(key, hashAlgo=SHA1)
+        hash_algo = SHA256 if use_sha256 else SHA1
+        cipher = PKCS1_OAEP.new(key, hashAlgo=hash_algo)
         encrypted = cipher.encrypt(logon)
     return struct.pack("<I", protocol) + encrypted
 
@@ -346,7 +347,7 @@ PROTOCOL = 285278213
 def main():
     print(f"\n{'='*55}")
     print(f"  WoT Bot v50 — REAL FIX from BigWorld source")
-    print(f"  v75: Try ALL combos: BW/WOT × OAEP/PKCS1 × with/without context field")
+    print(f"  v76: Try ALL 10 combos: BW/WOT × OAEP-SHA1/PKCS1/SHA256 × ctx/no-ctx")
     print(f"{'='*55}\n")
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -430,16 +431,23 @@ def main():
     
     # Combinations to try: (key_name, key, use_context, use_pkcs1)
     combos = [
-        ("KEY_BW+OAEP+ctx", KEY_BW, True, False),
-        ("KEY_WOT+OAEP+ctx", KEY_WOT, True, False),
-        ("KEY_BW+PKCS1", KEY_BW, False, True),
-        ("KEY_WOT+PKCS1", KEY_WOT, False, True),
-        ("KEY_BW+PKCS1+ctx", KEY_BW, True, True),
-        ("KEY_WOT+PKCS1+ctx", KEY_WOT, True, True),
+        # No-context first (C++ BigWorld format)
+        ("KEY_BW+OAEP-SHA1", KEY_BW, False, False, False),
+        ("KEY_WOT+OAEP-SHA1", KEY_WOT, False, False, False),
+        ("KEY_BW+PKCS1", KEY_BW, False, True, False),
+        ("KEY_WOT+PKCS1", KEY_WOT, False, True, False),
+        # With context (wg-toolkit-rs format)
+        ("KEY_BW+OAEP+ctx", KEY_BW, True, False, False),
+        ("KEY_WOT+OAEP+ctx", KEY_WOT, True, False, False),
+        ("KEY_BW+PKCS1+ctx", KEY_BW, True, True, False),
+        ("KEY_WOT+PKCS1+ctx", KEY_WOT, True, True, False),
+        # OAEP-SHA256 (maybe server uses different hash)
+        ("KEY_BW+OAEP-SHA256", KEY_BW, False, False, True),
+        ("KEY_WOT+OAEP-SHA256", KEY_WOT, False, False, True),
     ]
     
-    for combo_name, rsa_key, use_ctx, use_pkcs1 in combos:
-        login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, use_context=use_ctx, use_pkcs1=use_pkcs1)
+    for combo_name, rsa_key, use_ctx, use_pkcs1, use_sha256 in combos:
+        login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, use_context=use_ctx, use_pkcs1=use_pkcs1, use_sha256=use_sha256)
         login_elem = build_request_v16(0x00, rid, login_body)
         content = cr_elem + login_elem
         pkt = build_packet(content, first_req=len(cr_elem))
