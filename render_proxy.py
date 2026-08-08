@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v17"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v18"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -781,6 +781,123 @@ def ct_extract():
         return jsonify({"ok": False, "error": str(e)})
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route("/test_login", methods=["POST"])
+def test_login():
+    """Test WoT login with the official RSA key."""
+    import socket, struct, hashlib, os, time, sys
+    from Crypto.PublicKey import RSA
+    from Crypto.Cipher import PKCS1_OAEP
+    from Crypto.Hash import SHA1
+    
+    KEY_OFFICIAL = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2G58NsNUP1h3qQMhi+nE
+S9yNH8B2hQ7bxrwKP79AxEkEx76DDTosIVNitvpfrJ3Was6G9HbJ/+3PB0KJA86T
+/ZzHhPy5ZAdKUKoSkrjVMo0hw3XZbyfocxYJBFFXMuvTKFfZXYBE9srsbqvtRQLW
+gCOTuK7g/prSHF5zEIxPVAOVc0LpymaB6LFYP/KrEKkXFv1ffBF2oBZq0Cp1+aO2
+3tu/jgq9hzv/kT1a/gJiwsjdjkpmXB7rRsUceKC7XDLnRZ/qLG22A8+xtAINq1nW
+891IXT17BkSKNWcb9ZfLDBEQsvhM6/0bageaEZigPZzF0NHc8k32LEHotqcr2wbA
+qwIDAQAB
+-----END PUBLIC KEY-----"""
+    
+    SERVER_HOST = "login.p1.worldoftanks.eu"
+    SERVER_PORT = 20016
+    PROTOCOL = struct.pack("<I", 285278213)  # 17.1.0 (5)
+    
+    def xorshift32(seed):
+        x = seed
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= (x >> 17) & 0xFFFFFFFF
+        x ^= (x << 5) & 0xFFFFFFFF
+        return x & 0xFFFFFFFF
+    
+    def build_packet(content, seq=1):
+        prefix = bytes([0] * 4)
+        flags = struct.pack("<H", 0x0001)  # HAS_REQUESTS
+        footer = struct.pack("<H", seq)
+        return prefix + flags + content + footer
+    
+    def build_request_v16(elem_id, rid, body):
+        length = len(body)
+        if length < 253:
+            header = struct.pack("<BBH", elem_id, length, 0)  # V16, 1B length
+        else:
+            header = struct.pack("<BBH", elem_id, 253, 0) + struct.pack("<I", length)
+        rid_bytes = struct.pack("<I", rid)
+        next_bytes = struct.pack("<H", 0)
+        return header + rid_bytes + next_bytes + body
+    
+    def pack_str_u24(s):
+        if isinstance(s, str):
+            s = s.encode()
+        length = len(s)
+        if length < 255:
+            return bytes([length]) + s
+        else:
+            return bytes([0xFF]) + struct.pack("<I", length)[1:] + s  # 3-byte length
+    
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(10)
+        
+        # Step 1: Send PING
+        ping_body = struct.pack("<I", 0)  # ping_seq=0
+        ping_elem = build_request_v16(0x02, 1, ping_body)
+        ping_pkt = build_packet(ping_elem, seq=1)
+        sock.sendto(ping_pkt, (SERVER_HOST, SERVER_PORT))
+        
+        try:
+            data, addr = sock.recvfrom(4096)
+            ping_ok = len(data) > 10
+        except socket.timeout:
+            return jsonify({"ok": False, "error": "PING timeout - server may be blocked"})
+        
+        # Step 2: Send Login with official key
+        bf_key = os.urandom(56)
+        login_nonce = os.urandom(4)
+        login_nonce_int = struct.unpack("<I", login_nonce)[0]
+        
+        # Build LogOnParams (C++ format: no context)
+        logon = struct.pack("<B", 0)  # flags
+        logon += pack_str_u24("guest")  # username
+        logon += pack_str_u24("")  # password
+        logon += pack_str_u24(bf_key)  # encryption key
+        logon += struct.pack("<I", login_nonce_int)  # nonce
+        
+        # RSA encrypt
+        rsa_key = RSA.importKey(KEY_OFFICIAL)
+        cipher = PKCS1_OAEP.new(rsa_key, hashAlgo=SHA1)
+        rsa_encrypted = cipher.encrypt(logon)
+        
+        # Build login body: protocol(4B) + packed_u24(256) + RSA(256B)
+        login_body = PROTOCOL + pack_str_u24(rsa_encrypted) 
+        
+        login_elem = build_request_v16(0x00, 2, login_body)
+        login_pkt = build_packet(login_elem, seq=2)
+        sock.sendto(login_pkt, (SERVER_HOST, SERVER_PORT))
+        
+        try:
+            data, addr = sock.recvfrom(4096)
+            status = data[10] if len(data) > 10 else -1
+            status_map = {0x40: "destream", 0x42: "challenge", 0x47: "invalid_user", 
+                         0x48: "invalid_pass", 0x55: "failed_challenge", 0x00: "success"}
+            status_text = status_map.get(status, f"unknown(0x{status:02x})")
+            return jsonify({
+                "ok": True,
+                "ping": "ok" if ping_ok else "fail",
+                "login_response_len": len(data),
+                "status_byte": status,
+                "status_text": status_text,
+                "raw_hex": data[:30].hex(),
+                "key_used": "KEY_OFFICIAL"
+            })
+        except socket.timeout:
+            return jsonify({"ok": False, "error": "Login timeout", "ping": "ok" if ping_ok else "fail"})
+        
+        sock.close()
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 if __name__ == "__main__":
