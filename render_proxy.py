@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v16"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v17"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -661,6 +661,126 @@ def wine_check():
         results["download_error"] = str(e)[:200]
     
     return jsonify({"ok": True, **results})
+
+
+@app.route("/ct_extract", methods=["POST"])
+def ct_extract():
+    """Download and extract the CT (Common Test) installer to find WoT CDN URLs."""
+    import subprocess, os, tempfile, shutil, urllib.request, ssl, tarfile, re
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    tmpdir = tempfile.mkdtemp()
+    
+    try:
+        # Download innoextract
+        inno_url = "https://github.com/dscharrer/innoextract/releases/download/1.9/innoextract-1.9-linux.tar.xz"
+        inno_tar = os.path.join(tmpdir, "inno.tar.xz")
+        inno_dir = os.path.join(tmpdir, "inno")
+        os.makedirs(inno_dir, exist_ok=True)
+        req = urllib.request.Request(inno_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(inno_tar, 'wb') as f:
+            f.write(resp.read())
+        with tarfile.open(inno_tar, 'r:xz') as t:
+            t.extractall(inno_dir)
+        
+        import platform
+        arch = platform.machine()
+        inno_bin = None
+        all_bins = []
+        for root, dirs, files in os.walk(inno_dir):
+            for f in files:
+                if f == 'innoextract':
+                    all_bins.append(os.path.join(root, f))
+        for b in all_bins:
+            os.chmod(b, 0o755)
+            if arch in b or 'x86_64' in b or 'amd64' in b:
+                inno_bin = b
+                break
+        if not inno_bin:
+            for b in all_bins:
+                os.chmod(b, 0o755)
+                try:
+                    r_test = subprocess.run([b, "--version"], capture_output=True, text=True, timeout=3)
+                    if r_test.returncode == 0:
+                        inno_bin = b
+                        break
+                except:
+                    pass
+        
+        # Download BOTH installers (regular + CT)
+        results = {}
+        for name, url in [
+            ("regular", "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.04.01.3190_eu/world_of_tanks_install_eu.exe"),
+            ("ct", "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.04.01.3190_eu/world_of_tanks_ct_install_eu.exe"),
+        ]:
+            installer_path = os.path.join(tmpdir, f"{name}.exe")
+            extract_dir = os.path.join(tmpdir, f"{name}_extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            req = urllib.request.Request(url, headers={"User-Agent": "Wargaming Game Center"})
+            resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+            with open(installer_path, 'wb') as f:
+                f.write(resp.read())
+            
+            # Extract
+            subprocess.run([inno_bin, "-d", extract_dir, "-s", installer_path],
+                         timeout=60, capture_output=True, text=True)
+            
+            # Read installer_cfg.xml and all text files
+            cfg_content = None
+            all_text = {}
+            for root, dirs, files in os.walk(extract_dir):
+                for f in files:
+                    fpath = os.path.join(root, f)
+                    rel = os.path.relpath(fpath, extract_dir)
+                    if f.endswith('.xml') or f.endswith('.cfg') or f.endswith('.json') or f.endswith('.ini') or f == 'installer_cfg.xml':
+                        try:
+                            with open(fpath, 'rb') as pf:
+                                raw = pf.read()
+                            text = raw.decode('utf-8', errors='replace')
+                            all_text[rel] = text
+                            if 'installer_cfg' in f:
+                                cfg_content = text
+                        except:
+                            pass
+                    # Also search ALL files for URLs
+                    try:
+                        with open(fpath, 'rb') as pf:
+                            raw = pf.read()
+                        if b'http' in raw and len(raw) < 5*1024*1024:
+                            urls = re.findall(rb'https?://[a-zA-Z0-9._/?&=:#-]+', raw)
+                            if urls:
+                                unique = list(set(u.decode('utf-8', errors='replace') for u in urls if 'wargaming' in u.decode('utf-8', errors='replace').lower() or 'wot' in u.decode('utf-8', errors='replace').lower()))
+                                if unique:
+                                    all_text[rel + " [URLs]"] = "\n".join(unique[:20])
+                    except:
+                        pass
+            
+            results[name] = {
+                "cfg": cfg_content,
+                "text_files": all_text,
+                "installer_size": os.path.getsize(installer_path)
+            }
+        
+        # Compare configs
+        regular_cfg = results.get("regular", {}).get("cfg", "")
+        ct_cfg = results.get("ct", {}).get("cfg", "")
+        
+        return jsonify({
+            "ok": True,
+            "regular_cfg": regular_cfg,
+            "ct_cfg": ct_cfg,
+            "regular_text": results.get("regular", {}).get("text_files", {}),
+            "ct_text": results.get("ct", {}).get("text_files", {}),
+            "same_config": regular_cfg == ct_cfg
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
