@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v11"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v12"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -267,6 +267,131 @@ def extract_installer():
             "text_files": text_file_contents,
             "inno_list": r_list.stdout[:2000] if r_list.stdout else r_list.stderr[:2000],
             "inno_extract_stderr": r.stderr[:500],
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.route("/wgpkg", methods=["POST"])
+def extract_wgpkg():
+    """Download WGC core .wgpkg (7z archive) and search for loginapp_wot.pubkey and config files."""
+    import subprocess, os, tempfile, shutil, urllib.request, ssl, tarfile
+    
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    tmpdir = tempfile.mkdtemp()
+    
+    try:
+        # Step 1: Download 7z binary (from GitHub releases)
+        sevenzip_url = "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-linux-x64.tar.xz"
+        sevenzip_tar = os.path.join(tmpdir, "7z.tar.xz")
+        sevenzip_dir = os.path.join(tmpdir, "7z")
+        os.makedirs(sevenzip_dir, exist_ok=True)
+        
+        req = urllib.request.Request(sevenzip_url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=30, context=ctx)
+        with open(sevenzip_tar, 'wb') as f:
+            f.write(resp.read())
+        
+        with tarfile.open(sevenzip_tar, 'r:xz') as t:
+            t.extractall(sevenzip_dir)
+        
+        sevenzip_bin = None
+        for root, dirs, files in os.walk(sevenzip_dir):
+            for f in files:
+                if f in ('7zz', '7z', '7zzs'):
+                    sevenzip_bin = os.path.join(root, f)
+                    os.chmod(sevenzip_bin, 0o755)
+                    break
+            if sevenzip_bin: break
+        
+        if not sevenzip_bin:
+            return jsonify({"ok": False, "error": "7z binary not found"})
+        
+        # Step 2: Download .wgpkg file (112 MB)
+        wgpkg_url = "https://wds.wargaming.net/wgc/releases_tTrHgLCKHBRiaL/wgc_26.04.01.3190_eu/wgc_26.04.01.3190_win64.wgpkg"
+        wgpkg_path = os.path.join(tmpdir, "wgc.wgpkg")
+        
+        req = urllib.request.Request(wgpkg_url, headers={"User-Agent": "Wargaming Game Center"})
+        resp = urllib.request.urlopen(req, timeout=120, context=ctx)
+        with open(wgpkg_path, 'wb') as f:
+            while True:
+                chunk = resp.read(1024*1024)
+                if not chunk: break
+                f.write(chunk)
+        
+        wgpkg_size = os.path.getsize(wgpkg_path)
+        
+        # Step 3: List files in the 7z archive
+        r_list = subprocess.run([sevenzip_bin, "l", wgpkg_path], capture_output=True, text=True, timeout=60)
+        file_list = r_list.stdout
+        
+        # Step 4: Search for loginapp_wot.pubkey and config files
+        interesting_patterns = ['loginapp', 'pubkey', '.xml', '.json', '.cfg', '.ini', 'config', 'cdn', 'wot/', 'res/']
+        found_in_list = []
+        for line in file_list.split('\n'):
+            for pat in interesting_patterns:
+                if pat in line.lower():
+                    found_in_list.append(line.strip())
+                    break
+        
+        # Step 5: Extract all files matching interesting patterns
+        extract_dir = os.path.join(tmpdir, "extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        # Extract everything (112MB compressed, might be larger uncompressed but let's try)
+        r_extract = subprocess.run([sevenzip_bin, "x", f"-o{extract_dir}", wgpkg_path, "-y", "-bso0", "-bse0"],
+                                  timeout=300, capture_output=True, text=True)
+        
+        # Step 6: Search for loginapp_wot.pubkey and read config files
+        found_files = []
+        text_files = {}
+        for root, dirs, files in os.walk(extract_dir):
+            for f in files:
+                rel = os.path.relpath(os.path.join(root, f), extract_dir)
+                fpath = os.path.join(root, f)
+                
+                if "pubkey" in f.lower() or "loginapp" in f.lower():
+                    try:
+                        with open(fpath, 'rb') as pf:
+                            raw = pf.read()
+                        found_files.append({"name": rel, "size": len(raw), "content": raw.decode('utf-8', errors='replace')[:1000]})
+                    except:
+                        found_files.append({"name": rel, "content": "[binary]"})
+                
+                if any(f.endswith(ext) for ext in ['.xml', '.json', '.ini', '.cfg', '.config', '.yaml', '.yml']):
+                    try:
+                        with open(fpath, 'rb') as pf:
+                            raw = pf.read()
+                        text = raw.decode('utf-8', errors='replace')[:5000]
+                        text_files[rel] = text
+                    except:
+                        pass
+                
+                # Search ALL files for RSA key
+                try:
+                    with open(fpath, 'rb') as pf:
+                        raw = pf.read()
+                    if b'MIIBIj' in raw:
+                        idx = raw.find(b'MIIBIj')
+                        found_files.append({"name": rel + " [RSA KEY!]", "content": raw[idx:idx+500].decode('utf-8', errors='replace')})
+                except:
+                    pass
+        
+        if found_files:
+            return jsonify({"ok": True, "found": True, "found_files": found_files, "text_files": text_files, "wgpkg_size": wgpkg_size})
+        
+        return jsonify({
+            "ok": True, "found": False,
+            "wgpkg_size": wgpkg_size,
+            "extract_returncode": r_extract.returncode,
+            "extract_stderr": r_extract.stderr[:500],
+            "interesting_in_list": found_in_list[:30],
+            "file_list_sample": file_list[-2000:],
+            "text_files": text_files
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
