@@ -19,7 +19,7 @@ def get_socket():
 
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "service": "wot-udp-proxy-v6"})
+    return jsonify({"ok": True, "service": "wot-udp-proxy-v7"})
 
 @app.route("/send", methods=["POST"])
 def send_packet():
@@ -146,7 +146,7 @@ def extract_installer():
     
     try:
         # Step 1: Download 7-Zip for Linux (static binary)
-        sevenzip_url = "https://www.7-zip.org/a/7z2408-linux-x64.tar.xz"
+        sevenzip_url = "https://github.com/ip7z/7zip/releases/download/26.02/7z2602-linux-x64.tar.xz"
         sevenzip_tar = os.path.join(tmpdir, "7z.tar.xz")
         sevenzip_dir = os.path.join(tmpdir, "7z")
         os.makedirs(sevenzip_dir, exist_ok=True)
