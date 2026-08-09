@@ -2,7 +2,7 @@
   "name": "WoT Bot",
   "image": "mcr.microsoft.com/devcontainers/python:3.11",
   "postCreateCommand": "pip install pycryptodome && git pull",
-  "postStartCommand": "timeout 120 python3 bw_bot_v50.py 2>&1 | tee /tmp/bot_output.txt; echo '=== BOT DONE ==='",
+  "postStartCommand": "timeout 120 python3 src/bw_bot.py 2>&1 | tee /tmp/bot_output.txt; echo '=== BOT DONE ==='",
   "forwardPorts": [],
   "customizations": {
     "vscode": {

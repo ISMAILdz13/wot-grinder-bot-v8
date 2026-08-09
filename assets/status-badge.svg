@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 40" width="300" height="40">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#161b22"/>
+      <stop offset="30%" stop-color="#161b22"/>
+      <stop offset="30.1%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#0d1117"/>
+    </linearGradient>
+
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#30363d"/>
+      <stop offset="100%" stop-color="#21262d"/>
+    </linearGradient>
+
+    <filter id="greenGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <style>
+    @keyframes greenPulse {
+      0% {
+        r: 4px;
+        opacity: 0.9;
+        stroke-width: 1.8px;
+      }
+      100% {
+        r: 13px;
+        opacity: 0;
+        stroke-width: 0.2px;
+      }
+    }
+    .pulse-ring {
+      animation: greenPulse 2s infinite cubic-bezier(0.215, 0.61, 0.355, 1);
+      transform-origin: 108px 20px;
+    }
+  </style>
+
+  <!-- Badge Background Container -->
+  <rect x="0.5" y="0.5" width="299" height="39" rx="6" fill="url(#bgGrad)" stroke="url(#borderGrad)" stroke-width="1"/>
+
+  <!-- Divider Line -->
+  <line x1="90" y1="0" x2="90" y2="40" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Left Label: Status -->
+  <text x="24" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700" fill="#8b949e" letter-spacing="1">STATUS</text>
+
+  <!-- Right Pulse Dot & Status Text -->
+  <g transform="translate(0, 0)">
+    <!-- Expanding Outer Pulsing Ring -->
+    <circle cx="108" cy="20" r="4" fill="none" stroke="#10b981" stroke-width="1.5" class="pulse-ring">
+      <animate attributeName="r" values="4;13" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.9;0" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-width" values="1.8;0.2" dur="2s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- Solid Core Green Dot -->
+    <circle cx="108" cy="20" r="4" fill="#10b981" filter="url(#greenGlow)"/>
+
+    <!-- Status Text: Cuckoo Accepted -->
+    <text x="126" y="25" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="700" fill="#34d399" letter-spacing="0.5">Cuckoo Accepted</text>
+
+    <!-- Checkmark Icon -->
+    <path d="M 272 17 L 276 21 L 284 13" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
