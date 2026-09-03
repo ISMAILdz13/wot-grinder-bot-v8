@@ -1,6 +1,33 @@
-__pycache__/
+```
+# Compiled and binary files
+*.so
 *.pyc
-.env
-*.log
-.venv/
+__pycache__/
+
+# Dependencies
 venv/
+.venv/
+node_modules/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors
+.vscode/
+.idea/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Python cache
+.mypy_cache/
+.pytest_cache/
+
+# Build directories
+build/
+dist/
+target/
+```
