@@ -1,1 +1,29 @@
-Nothing should be ignored based on the provided file changes, as only a README.md file was modified and no build artifacts, dependencies, or temporary files were detected.
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+
+# Editors
+.vscode/
+.idea/
+
+# Build artifacts
+dist/
+build/
+target/
+```
