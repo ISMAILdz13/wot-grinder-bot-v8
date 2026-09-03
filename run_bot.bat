@@ -92,30 +92,25 @@ echo ================================================================
 echo.
 echo   WARNING: Your credentials will be stored in credentials.ini
 echo            This file should be kept secure!
+echo            NEVER share this file or commit it to git!
 echo.
 
 set /p WOT_USERNAME="Enter your WoT username/email: "
 echo.
+set /p WOT_PASSWORD="Enter your WoT password: "
 
-:: Mask password input using PowerShell
-echo Enter your WoT password:
-powershell -Command "$p = New-Object System.Security.SecureString; do { $k = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); if ($k.VirtualKeyCode -eq 13) { break }; if ($k.VirtualKeyCode -eq 8 -and $p.Length -gt 0) { $p.Remove($p.Length-1,1); Write-Host -NoNewline "`b `b" }; elseif ($k.Character -ne 0) { $p += $k.Character; Write-Host -NoNewline '*'} } while ($true); $b = New-Object System.Runtime.InteropServices.MarshalBuilder+SecureStringBSTR([System.Security.SecureString]$p); Write-Output $b.ToString()"
-set /p WOT_PASSWORD=
-
-:: Alternative simple password input
-echo.
-echo [NOTE] If password masking didn't work, enter password directly:
-set /p WOT_PASSWORD="Password: "
-
-:: Save credentials
-echo [username] = %WOT_USERNAME% > credentials.ini
-echo [password] = %WOT_PASSWORD% >> credentials.ini
+:: Save credentials in STANDARD INI FORMAT
+echo [credentials] > credentials.ini
+echo username = %WOT_USERNAME% >> credentials.ini
+echo password = %WOT_PASSWORD% >> credentials.ini
 
 echo.
 echo [SUCCESS] Credentials saved to credentials.ini
 echo.
 echo Username: %WOT_USERNAME%
 echo Password: ********
+echo.
+echo File format: Standard INI with [credentials] section
 echo.
 pause
 goto MENU
@@ -203,10 +198,11 @@ echo.
 
 if exist credentials.ini (
     echo [CREDENTIALS FILE] Found: credentials.ini
-    for /f "tokens=2 delims==" %%a in ('findstr "[username]" credentials.ini') do echo   Username: %%a
+    for /f "tokens=2 delims==" %%a in ('findstr "username" credentials.ini') do echo   Username: %%a
     echo   Password: ********
 ) else (
     echo [CREDENTIALS FILE] Not found
+    echo   Run option [2] to enter credentials
 )
 
 echo.
