@@ -122,6 +122,13 @@ def pack_str_u32(s):
     b = s.encode() if isinstance(s, str) else s
     return struct.pack("<I", len(b)) + b
 
+def pack_str_u8(s):
+    """Pack string with 1-byte length prefix (uint8)"""
+    b = s.encode() if isinstance(s, str) else s
+    if len(b) > 255:
+        raise ValueError("String too long for u8 length prefix")
+    return struct.pack("<B", len(b)) + b
+
 def pack_str_u24(s):
     b = s.encode() if isinstance(s, str) else s
     return pack_u24(len(b)) + b
@@ -140,24 +147,45 @@ def build_logon_u32(bf_key):
     logon += struct.pack("<I", login_nonce)  # nonce (NO context field in C++)
     return logon
 
-def build_login_rsa(protocol, bf_key, rsa_key_pem, use_context=False, use_pkcs1=False, use_sha256=False):
-    """RSA-encrypted login with configurable context, padding, and hash."""
-    logon = struct.pack("<B", 0)
-    logon += pack_str_u24("guest")
-    logon += pack_str_u24("")
-    logon += pack_str_u24(bf_key)
-    if use_context:
-        logon += pack_str_u24("")  # context field
+def build_login_rsa(protocol, bf_key, rsa_key_pem, username="guest", password=""):
+    """RSA-encrypted login with PKCS#1 v1.5 padding (BigWorld standard).
+    
+    LogOnParams structure (with MD5 digest - matching BigWorld auth):
+    - flags: 1 byte (0x01 = has digest)
+    - digest: 16 bytes (MD5 of "username:password")
+    - username: 1-byte length + bytes
+    - password: 1-byte length + bytes
+    - bf_key: 1-byte length + 56 bytes
+    - context: 1-byte length + bytes (empty)
+    - nonce: 4 bytes (u32 LE)
+    Total: 116 bytes for typical credentials
+    """
+    # Calculate MD5 digest of credentials
+    credentials = f"{username}:{password}".encode('utf-8')
+    digest = hashlib.md5(credentials).digest()
+    
+    # Build LogOnParams WITH digest (flags=0x01)
+    logon = struct.pack("<B", 0x01)  # flags indicating digest present
+    logon += digest                  # 16-byte MD5 digest
+    logon += pack_str_u8(username)
+    logon += pack_str_u8(password)
+    logon += pack_str_u8(bf_key)
+    logon += pack_str_u8("")         # empty context
     logon += struct.pack("<I", login_nonce)
+    
+    print(f"    [DEBUG] LogOnParams plaintext ({len(logon)}B): {logon.hex()[:100]}...")
+    
+    # RSA encrypt with PKCS#1 v1.5 padding
     key = RSA.importKey(rsa_key_pem)
-    if use_pkcs1:
-        cipher = PKCS1_v1_5.new(key)
-        encrypted = cipher.encrypt(logon)
-    else:
-        hash_algo = SHA256 if use_sha256 else SHA1
-        cipher = PKCS1_OAEP.new(key, hashAlgo=hash_algo)
-        encrypted = cipher.encrypt(logon)
-    return struct.pack("<I", protocol) + encrypted
+    cipher = PKCS1_v1_5.new(key)
+    encrypted = cipher.encrypt(logon)
+    
+    # Ensure exactly 256 bytes
+    if len(encrypted) != 256:
+        encrypted = encrypted.ljust(256, b'\x00')[:256]
+    
+    # Body: protocol(4B) + flag(1B) + encrypted(256B)
+    return struct.pack("<I", protocol) + struct.pack("<B", 1) + encrypted
 
 def build_login_noflag(protocol, bf_key, rsa_key_pem):
     # Default: OAEP-SHA1, no context
@@ -348,6 +376,12 @@ s7lm2Bh2WezlZSDikycb1r3FvB4wUhohahwfuORGdMtxidzIQzNdcFo0Gg+dg7wc
 hwIDAQAB
 -----END PUBLIC KEY-----"""
 
+# ECDSA key for replay signature verification (not used for login)
+KEY_REPLAY_SIGN = """-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY+nZNbhWX5AOcdYlJtR8J9fRbfAa
+0EEQhEt5g2lg6DmVteKdI8FSpczmmYQ90iXQDvJV0mbRpvmCMRsaooVMgw==
+-----END PUBLIC KEY-----"""
+
 
 SERVER_HOST = "login.p1.worldoftanks.eu"
 SERVER_PORT = 20016
@@ -375,11 +409,28 @@ def main():
     else: print("FAIL"); return
 
     solution = None; key_str = None; bf_key = None; solve_time = 0
+    
+    # Test credentials for initial login attempts
+    TEST_USERNAME = "ismail2011dz@zohomail.com"
+    TEST_PASSWORD = "Gg200gg200"
+    
     for attempt in range(1, 16):
         print(f"\n[1] Login — attempt {attempt}...")
         bf_key = os.urandom(56)
-        logon = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce)
-        login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon
+        
+        # Build LogOnParams with MD5 digest (flags=0x01 + 16-byte digest)
+        credentials = f"{TEST_USERNAME}:{TEST_PASSWORD}".encode('utf-8')
+        digest = hashlib.md5(credentials).digest()
+        logon = struct.pack("<B", 0x01) + digest
+        logon += pack_str_u8(TEST_USERNAME)
+        logon += pack_str_u8(TEST_PASSWORD)
+        logon += pack_str_u8(bf_key)
+        logon += pack_str_u8("")  # context
+        logon += struct.pack("<I", login_nonce)
+        
+        print(f"    [DEBUG] Initial LogOnParams ({len(logon)}B): {logon.hex()[:80]}...")
+        
+        login_body = struct.pack("<I", PROTOCOL) + struct.pack("<B", 1) + logon
         elem = build_request_v16(0x00, rid, login_body)
         
         # Send first login via PROXY (same socket as PING)
@@ -439,16 +490,15 @@ def main():
     cr_body = build_cr_body(solve_time, key_str, solution)
     cr_elem = build_message_v16(0x03, cr_body)
     
-    # Combinations to try: (key_name, key, use_context, use_pkcs1)
+    # Combinations: (name, key) - simplified since we use PKCS#1 v1.5 for all
     combos = [
-        ("KEY_OFFICIAL+OAEP-SHA1", KEY_OFFICIAL, False, False, False),
-        ("KEY_OFFICIAL+OAEP-SHA256", KEY_OFFICIAL, False, False, True),
-        ("KEY_OFFICIAL+PKCS1", KEY_OFFICIAL, False, True, False),
-        ("KEY_OFFICIAL+OAEP+ctx", KEY_OFFICIAL, True, False, False),
+        ("OFFICIAL", KEY_OFFICIAL),
+        ("WOT", KEY_WOT),
+        ("BW", KEY_BW),
     ]
     
-    for combo_name, rsa_key, use_ctx, use_pkcs1, use_sha256 in combos:
-        login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, use_context=use_ctx, use_pkcs1=use_pkcs1, use_sha256=use_sha256)
+    for combo_name, rsa_key in combos:
+        login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, username=TEST_USERNAME, password=TEST_PASSWORD)
         login_elem = build_request_v16(0x00, rid, login_body)
         content = cr_elem + login_elem
         pkt = build_packet(content, first_req=len(cr_elem))
@@ -488,10 +538,12 @@ def main():
                 proxy_reset()
                 pdata2 = proxy_send(build_ping(rid), timeout=10)
                 if pdata2: rid += 1
-                # New login to get new challenge
+                # New login to get new challenge (with digest)
                 login_nonce_new = random.randint(1, 0xFFFFFFFF)
-                logon2 = struct.pack("<B", 0) + pack_str_u24("guest") + pack_str_u24("") + pack_str_u24(bf_key) + pack_str_u24("") + struct.pack("<I", login_nonce_new)
-                lb2 = struct.pack("<I", PROTOCOL) + struct.pack("<B", 0) + logon2
+                credentials_new = f"{TEST_USERNAME}:{TEST_PASSWORD}".encode('utf-8')
+                digest_new = hashlib.md5(credentials_new).digest()
+                logon2 = struct.pack("<B", 1) + digest_new + pack_str_u8(TEST_USERNAME) + pack_str_u8(TEST_PASSWORD) + pack_str_u8(bf_key) + pack_str_u8("") + struct.pack("<I", login_nonce_new)
+                lb2 = struct.pack("<I", PROTOCOL) + struct.pack("<B", 1) + logon2
                 elem2 = build_request_v16(0x00, rid, lb2)
                 pdata3 = proxy_send(build_packet(elem2, first_req=0), timeout=15)
                 rid += 1

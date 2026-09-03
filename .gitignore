@@ -1,6 +1,57 @@
-__pycache__/
+```
+# Compiled and binary files
+*.so
 *.pyc
-.env
+__pycache__/
+
+# Archives and backups
+*.zip
+*.tar
+*.gz
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+
+# Logs
 *.log
-.venv/
-venv/
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Python specific
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+*.egg
+
+# Backup files
+*~
+*.bak
+*.backup
+
+# Archive directories
+archive/
+```
