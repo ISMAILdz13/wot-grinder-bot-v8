@@ -1,23 +1,20 @@
-import os
 #!/usr/bin/env python3
-"""WoT Bot v51 — OFFICIAL KEY — THE REAL FIX from BigWorld source
+"""WoT Bot v52 — OFFICIAL KEY — FIXED VERSION
 
-TWO CRITICAL BUGS FOUND in BigWorld cuckoo_cycle_login_challenge_factory.cpp:
+FIXES APPLIED:
+1. Removed unreliable encrypted_flag comparison test (PKCS1_OAEP is randomized)
+2. Credentials loaded from environment or credentials.ini (not hardcoded)
+3. Cross-platform Cuckoo solver compilation (Windows DLL + Linux SO)
+4. Fixed LogOnParams format based on RE analysis
 
-BUG 1: NO DURATION FIELD!
-  CR body = key + 42×nonces (NO duration!)
-  Server checks: data.remainingLength() != PROOFSIZE * sizeof(nonce_t)
-  With our 4-byte duration: remaining=172, expected=168 → 0x55!
+KNOWN ISSUES FROM ANALYSIS:
+- PKCS1_OAEP.encrypt() is randomized - cannot compare ciphertexts byte-for-byte
+- The encrypted_flag byte hypothesis was unproven - server protocol structure unclear
+- Challenge response testing was incomplete (only tested outer body, not challenge/session binding)
 
-BUG 2: KEY = prefix + COUNTER, not just prefix!
-  Client tries: prefix+"0", prefix+"1", ... until solution found
-  SHA256 computed on FULL key (e.g. "15f1666a9447d980:0")
-  We were using just "15f1666a9447d980:" → wrong node values!
-
-Also confirmed: SIZESHIFT=20, NODEMASK=HALFSIZE-1, HALFSIZE offset encoding.
-Our original solver was correct, but the CR body and key were wrong!
+See tests/test_encrypted_flag_hypothesis.py for detailed analysis.
 """
-import socket, struct, os, hashlib, time, array, random
+import socket, struct, os, hashlib, time, array, random, sys
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP, PKCS1_v1_5
 from Crypto.Hash import SHA1, SHA256
@@ -50,27 +47,54 @@ def proxy_reset():
 
 
 # ===== FAST C CUCKOO SOLVER (10x faster than pure Python) =====
-import ctypes, subprocess, os as os, tempfile as _tf
+import ctypes, subprocess, os as os, tempfile as _tf, platform
 
 _fast_lib = None
 def _try_compile_fast():
+    """Compile and load Cuckoo solver for current platform.
+    
+    Supports:
+    - Linux: .so files
+    - Windows: .dll files  
+    - macOS: .dylib files
+    """
     global _fast_lib
     src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cuckoo_fast.c')
-    lib = src.replace('.c', '.so')
+    
+    # Determine platform-specific library name and compiler flags
+    system = platform.system().lower()
+    if system == 'windows':
+        lib = src.replace('.c', '.dll')
+        compiler = ['gcc']  # MinGW-w64
+        cflags = ['-O3', '-shared']
+    elif system == 'darwin':
+        lib = src.replace('.c', '.dylib')
+        compiler = ['clang']
+        cflags = ['-O3', '-shared', '-fPIC']
+    else:  # Linux and others
+        lib = src.replace('.c', '.so')
+        compiler = ['gcc']
+        cflags = ['-O3', '-shared', '-fPIC']
+    
     if not os.path.exists(lib):
-        ret = subprocess.call(['gcc','-O3','-shared','-fPIC','-o',lib,src],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if ret != 0: return False
+        # Try to compile
+        cmd = compiler + cflags + ['-o', lib, src]
+        ret = subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ret != 0:
+            return False
+    
     try:
         _fast_lib = ctypes.CDLL(lib)
         _fast_lib.cuckoo_solve.argtypes = [ctypes.c_char_p, ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint32)]
         _fast_lib.cuckoo_solve.restype = ctypes.c_int
         return True
-    except: return False
+    except Exception as e:
+        print(f"  [WARN] Could not load C solver: {e}")
+        return False
 
 _compiled = _try_compile_fast()
 if _compiled: print("  [C solver loaded — 10x faster!]")
-else: print("  [Pure Python solver]")
+else: print("  [Pure Python solver — install gcc/clang for 10x speedup]")
 
 def _fast_cuckoo_hint(key_str, max_nonce):
     """Returns a hint nonce near a cycle, or None. C solver."""
@@ -364,8 +388,11 @@ def build_login_noflag(protocol, bf_key, rsa_key_pem):
 
 
 def build_cr_body(duration, key_str, solution):
-    body = struct.pack("<f", duration)  # data << duration (f32)
-    body += pack_str_u24(key_str)  # data << key (packed_u24 — SAME as challenge!)
+    # CRITICAL FIX: BigWorld source says NO DURATION FIELD!
+    # Server checks: data.remainingLength() == PROOFSIZE * sizeof(nonce_t) = 42 * 4 = 168
+    # With duration field: remaining=172, expected=168 -> error 0x55 or new challenge
+    # Format should be: key (packed_u24) + 42 nonces (u32 LE each)
+    body = pack_str_u24(key_str)  # data << key (packed_u24 — SAME as challenge!)
     body += b''.join(struct.pack("<I", n) for n in solution)  # 42 × u32
     return body
 
@@ -597,12 +624,66 @@ SERVER_PORT = 20016
 SERVER = (SERVER_HOST, SERVER_PORT)
 PROTOCOL = 285278213
 
+def load_credentials():
+    """Load credentials from environment variables or credentials.ini file.
+    
+    Priority:
+    1. Environment variables: WOT_USERNAME, WOT_PASSWORD
+    2. credentials.ini file in current directory or src/
+    3. Default test credentials (for debugging only)
+    
+    Returns: (username, password) tuple
+    """
+    # Check environment variables first
+    username = os.environ.get('WOT_USERNAME')
+    password = os.environ.get('WOT_PASSWORD')
+    
+    if username and password:
+        print(f"  [INFO] Loaded credentials from environment variables")
+        return username, password
+    
+    # Try to load from credentials.ini
+    config_paths = [
+        'credentials.ini',
+        os.path.join(os.path.dirname(__file__), 'credentials.ini'),
+        os.path.join(os.getcwd(), 'credentials.ini')
+    ]
+    
+    for config_path in config_paths:
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('[username]') or line.startswith('username'):
+                            username = line.split('=', 1)[1].strip()
+                        elif line.startswith('[password]') or line.startswith('password'):
+                            password = line.split('=', 1)[1].strip()
+                    
+                    if username and password:
+                        print(f"  [INFO] Loaded credentials from {config_path}")
+                        return username, password
+            except Exception as e:
+                print(f"  [WARN] Could not read {config_path}: {e}")
+    
+    # Fallback to default test credentials
+    print(f"  [WARN] No credentials found! Using test credentials.")
+    print(f"  [WARN] Set WOT_USERNAME and WOT_PASSWORD environment variables,")
+    print(f"  [WARN] or create credentials.ini with your WoT account details.")
+    return "test_user", "test_password"
+
+
 def main():
     print(f"\n{'='*55}")
-    print(f"  WoT Bot v51 — OFFICIAL KEY — REAL FIX from BigWorld source")
-    print(f"  v76: Try ALL 10 combos: BW/WOT × OAEP-SHA1/PKCS1/SHA256 × ctx/no-ctx")
+    print(f"  WoT Bot v52 — FIXED VERSION")
+    print(f"  - Credentials from env/ini (not hardcoded)")
+    print(f"  - Cross-platform Cuckoo solver (Windows DLL + Linux SO)")
+    print(f"  - Fixed encrypted_flag analysis (PKCS1_OAEP is randomized)")
     print(f"{'='*55}\n")
-
+    
+    # Load credentials securely
+    username, password = load_credentials()
+    
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.settimeout(45)
     rid = 1
@@ -618,10 +699,6 @@ def main():
     else: print("FAIL"); return
 
     solution = None; key_str = None; bf_key = None; solve_time = 0
-    
-    # Test credentials for initial login attempts
-    username = "ismail2011dz@zohomail.com"
-    password = "Gg200gg200"
     
     for attempt in range(1, 16):
         print(f"\n[1] Login — attempt {attempt}...")
@@ -707,8 +784,10 @@ def main():
 # The server sends LoginBegin (0x06/0x07) with the bf_key we MUST use
     print(f"\n[3] Sending Cuckoo Solution (key={key_str})...")
     cr_body = build_cr_body(solve_time, key_str, solution)
-    cr_elem = build_message_v16(0x03, cr_body)
+    # Use build_request_fixed instead of build_message_v16 - element 0x03 needs rid field
+    cr_elem = build_request_fixed(0x03, rid, cr_body)
     pkt_cr = build_packet(cr_elem, first_req=0)
+    rid += 1
     
     print(f"  [PROXY] Sending CR ({len(pkt_cr)}B)...")
     pdata = proxy_send(pkt_cr, timeout=30)
@@ -847,7 +926,8 @@ def main():
                             if solution and len(solution) == 42:
                                 print(f"  Solved: counter={counter}, {solve_time:.1f}s")
                                 cr_body = build_cr_body(solve_time, key_str, solution)
-                                cr_elem = build_message_v16(0x03, cr_body)
+                                cr_elem = build_request_fixed(0x03, rid, cr_body)
+                                rid += 1
                                 break
         else:
             print("  [PROXY] No response (timeout)")
