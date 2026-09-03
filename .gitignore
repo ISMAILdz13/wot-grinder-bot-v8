@@ -1,6 +1,48 @@
+```
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Python specific
 __pycache__/
 *.pyc
-.env
-*.log
-.venv/
+*.pyo
+*.pyd
+.Python
+env/
 venv/
+.venv/
+.venv*/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage/
+
+# Build and distribution artifacts
+dist/
+build/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Testing
+htmlcov/
+.coverage.*
+coverage.xml
+```
