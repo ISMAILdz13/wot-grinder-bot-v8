@@ -620,8 +620,8 @@ def main():
     solution = None; key_str = None; bf_key = None; solve_time = 0
     
     # Test credentials for initial login attempts
-    TEST_USERNAME = "ismail2011dz@zohomail.com"
-    TEST_PASSWORD = "Gg200gg200"
+    username = "ismail2011dz@zohomail.com"
+    password = "Gg200gg200"
     
     for attempt in range(1, 16):
         print(f"\n[1] Login — attempt {attempt}...")
@@ -633,7 +633,7 @@ def main():
         # 
         # Conclusion: Server expects u8 length prefixes (pack_str_u8), NOT u32!
         # Using the legacy v3 format that matches what partially works:
-        logon = build_logon_params_v3(TEST_USERNAME, TEST_PASSWORD, bf_key)
+        logon = build_logon_params_v3(username, password, bf_key)
         
         print(f"    [DEBUG] LogOnParams v3 (legacy u8 format) ({len(logon)}B): {logon.hex()[:100]}...")
         print(f"    [DEBUG] Format: [flags=0x01][digest=16B][username_u8][password_u8][bf_key_u8][context_u8][nonce]")
@@ -766,10 +766,10 @@ def main():
     for combo_name, rsa_key, use_reversed in combos:
         if use_reversed:
             # Use RE-based LogOnParams (no bf_key, no digest)
-            login_body = build_login_rsa_reversed(PROTOCOL, rsa_key, TEST_USERNAME, TEST_PASSWORD)
+            login_body = build_login_rsa_reversed(PROTOCOL, rsa_key, username, password)
         else:
             # Use legacy format with the EXACT server-provided bf_key
-            login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, username=TEST_USERNAME, password=TEST_PASSWORD)
+            login_body = build_login_rsa(PROTOCOL, bf_key, rsa_key, username=username, password=password)
         
         # CRITICAL: Send ONLY Login Request (CR already sent separately)
         login_elem = build_request_v16(0x00, rid, login_body)
@@ -824,9 +824,9 @@ def main():
                 if pdata2: rid += 1
                 # New login to get new challenge (with digest)
                 login_nonce_new = random.randint(1, 0xFFFFFFFF)
-                credentials_new = f"{TEST_USERNAME}:{TEST_PASSWORD}".encode('utf-8')
+                credentials_new = f"{username}:{password}".encode('utf-8')
                 digest_new = hashlib.md5(credentials_new).digest()
-                logon2 = struct.pack("<B", 1) + digest_new + pack_str_u8(TEST_USERNAME) + pack_str_u8(TEST_PASSWORD) + pack_str_u8(bf_key) + pack_str_u8("") + struct.pack("<I", login_nonce_new)
+                logon2 = struct.pack("<B", 1) + digest_new + pack_str_u8(username) + pack_str_u8(password) + pack_str_u8(bf_key) + pack_str_u8("") + struct.pack("<I", login_nonce_new)
                 lb2 = struct.pack("<I", PROTOCOL) + struct.pack("<B", 1) + logon2
                 elem2 = build_request_v16(0x00, rid, lb2)
                 pdata3 = proxy_send(build_packet(elem2, first_req=0), timeout=15)
