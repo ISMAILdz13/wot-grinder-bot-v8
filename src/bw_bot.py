@@ -585,6 +585,12 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY+nZNbhWX5AOcdYlJtR8J9fRbfAa
 0EEQhEt5g2lg6DmVteKdI8FSpczmmYQ90iXQDvJV0mbRpvmCMRsaooVMgw==
 -----END PUBLIC KEY-----"""
 
+# ECDSA key for replay signature verification (not used for login)
+KEY_REPLAY_SIGN = """-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY+nZNbhWX5AOcdYlJtR8J9fRbfAa
+0EEQhEt5g2lg6DmVteKdI8FSpczmmYQ90iXQDvJV0mbRpvmCMRsaooVMgw==
+-----END PUBLIC KEY-----"""
+
 
 SERVER_HOST = "login.p1.worldoftanks.eu"
 SERVER_PORT = 20016
